@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, apply_migrations
-from app.routers import health, chat, workflows, integrations
+from app.routers import health, chat, workflows, integrations, dashboard
 from app.services.email_templates import seed_default_templates
 from app.services.calendar_poller import poll_calendars
 
@@ -56,3 +56,4 @@ app.include_router(health.router)
 app.include_router(chat.router, prefix="/api")
 app.include_router(workflows.router, prefix="/api")
 app.include_router(integrations.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api")

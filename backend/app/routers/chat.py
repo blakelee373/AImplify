@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
 from app.models.conversation import Conversation, Message
+from app.models.workflow import Workflow
 from app.schemas.chat import (
     ChatRequest,
     ChatResponse,
@@ -65,9 +66,29 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, db: Sess
     recent = all_messages[-MAX_HISTORY:] if len(all_messages) > MAX_HISTORY else all_messages
     history = [{"role": m.role, "content": m.content} for m in recent]
 
-    # Check if we need to inject workflow acknowledgment
+    # Edit mode — inject existing workflow context
     extra_system = None
-    if conversation.workflow_id:
+    if request.workflow_edit_id:
+        edit_wf = db.query(Workflow).filter(Workflow.id == request.workflow_edit_id).first()
+        if edit_wf:
+            steps_desc = "\n".join(
+                "  Step {}: {} — {}".format(s.step_order, s.action_type, s.description or "")
+                for s in edit_wf.steps
+            )
+            extra_system = (
+                "EDIT MODE: The owner wants to edit an existing task called '{}'. "
+                "Current setup:\n- Trigger: {}\n- Steps:\n{}\n- Conditions: {}\n\n"
+                "Show them the current setup in plain English. Ask what they'd like to change. "
+                "Only change what they ask. When confirmed, update this task, don't create a new one."
+            ).format(
+                edit_wf.name,
+                edit_wf.trigger_description or edit_wf.trigger_type or "Not specified",
+                steps_desc or "  (none)",
+                ", ".join(edit_wf.conditions) if edit_wf.conditions else "None",
+            )
+
+    # Check if we need to inject workflow acknowledgment
+    if not extra_system and conversation.workflow_id:
         already_acked = any(
             m.metadata_ and m.metadata_.get("workflow_acknowledged")
             for m in all_messages
