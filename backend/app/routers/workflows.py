@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict, Any
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.workflow import Workflow
 from app.schemas.workflow import WorkflowResponse, WorkflowUpdate
+from app.services.workflow_executor import execute_workflow
 
 router = APIRouter()
 
@@ -67,3 +68,37 @@ async def delete_workflow(workflow_id: str, db: Session = Depends(get_db)):
     workflow.deleted_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "deleted"}
+
+
+@router.post("/workflows/{workflow_id}/test")
+async def test_workflow(workflow_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Run a workflow in dry-run mode with sample data."""
+    workflow = db.query(Workflow).filter(
+        Workflow.id == workflow_id,
+        Workflow.deleted_at.is_(None),
+    ).first()
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    # Build sample trigger context
+    sample_context = {
+        "client_name": "Sarah Johnson",
+        "client_email": "sarah@example.com",
+        "client_phone": "+15551234567",
+        "appointment_time": "Tuesday, April 15 at 2:00 PM",
+        "appointment_date": "April 15, 2026",
+        "service_type": "Hydrafacial",
+        "business_name": "Glow Medspa",
+        "business_phone": "(555) 987-6543",
+        "review_link": "https://g.page/r/example",
+        "provider_name": "Dr. Smith",
+        "days_since_visit": "30",
+        "trigger_type": "manual_test",
+    }
+
+    result = await execute_workflow(
+        workflow_id=workflow.id,
+        trigger_context=sample_context,
+        dry_run=True,
+    )
+    return result

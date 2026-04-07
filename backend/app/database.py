@@ -28,6 +28,7 @@ def get_db():
 # Columns added after initial schema — each entry is an ALTER TABLE statement.
 # Failed statements (column already exists) are silently skipped.
 _MIGRATIONS = [
+    # Phase 1
     "ALTER TABLE conversations ADD COLUMN workflow_id VARCHAR REFERENCES workflows(id)",
     "ALTER TABLE workflows ADD COLUMN deleted_at DATETIME",
     "ALTER TABLE workflows ADD COLUMN trigger_description TEXT",

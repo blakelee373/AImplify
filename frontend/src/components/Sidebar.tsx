@@ -103,8 +103,20 @@ export function Sidebar({
           })}
         </nav>
 
-        {/* Dashboard link */}
-        <div className="px-3 py-4 border-t border-white/10">
+        {/* Bottom links */}
+        <div className="px-3 py-4 border-t border-white/10 space-y-0.5">
+          <Link
+            href="/integrations"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-sidebar-text/70 hover:bg-sidebar-hover hover:text-white transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6 3v4l-3 2M10 3v4l3 2M8 10v4" />
+              <circle cx="6" cy="3" r="1.5" />
+              <circle cx="10" cy="3" r="1.5" />
+              <circle cx="8" cy="14" r="1.5" />
+            </svg>
+            Connected Tools
+          </Link>
           <Link
             href="/dashboard"
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-sidebar-text/70 hover:bg-sidebar-hover hover:text-white transition-colors"

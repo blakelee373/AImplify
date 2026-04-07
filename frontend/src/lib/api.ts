@@ -19,10 +19,10 @@ export const api = {
     return request<T>(path);
   },
 
-  post<T>(path: string, body: unknown): Promise<T> {
+  post<T>(path: string, body?: unknown): Promise<T> {
     return request<T>(path, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: body ? JSON.stringify(body) : undefined,
     });
   },
 
@@ -38,7 +38,7 @@ export const api = {
   },
 };
 
-// --- Typed API functions ---
+// --- Types ---
 
 export interface ConversationSummary {
   id: string;
@@ -71,6 +71,36 @@ export interface ChatResult {
   workflow_saved: boolean;
 }
 
+export interface IntegrationInfo {
+  name: string;
+  display_name: string;
+  description: string;
+  auth_type: string;
+  capabilities: string[];
+  status: "connected" | "disconnected" | "error" | "expired";
+}
+
+export interface WorkflowTestResult {
+  success: boolean;
+  execution_id?: string;
+  workflow_name?: string;
+  dry_run: boolean;
+  steps: WorkflowStepResult[];
+  error?: string;
+}
+
+export interface WorkflowStepResult {
+  step_order: number;
+  action_type: string;
+  description: string;
+  success: boolean;
+  dry_run?: boolean;
+  preview?: string;
+  error?: string;
+}
+
+// --- API functions ---
+
 export function fetchConversations() {
   return api.get<ConversationSummary[]>("/api/conversations");
 }
@@ -84,4 +114,38 @@ export function sendMessage(message: string, conversationId: string | null) {
     message,
     conversation_id: conversationId,
   });
+}
+
+export function fetchIntegrations() {
+  return api.get<IntegrationInfo[]>("/api/integrations");
+}
+
+export function connectGoogle() {
+  return api.get<{ auth_url: string }>("/api/integrations/connect/google");
+}
+
+export function connectTwilio(creds: {
+  account_sid: string;
+  auth_token: string;
+  phone_number: string;
+}) {
+  return api.post<{ status: string }>("/api/integrations/connect/twilio", creds);
+}
+
+export function disconnectIntegration(type: string) {
+  return api.post<{ status: string }>(`/api/integrations/disconnect/${type}`);
+}
+
+export function testIntegration(type: string) {
+  return api.get<{ integration: string; connected: boolean }>(
+    `/api/integrations/status/${type}`
+  );
+}
+
+export function testWorkflow(workflowId: string) {
+  return api.post<WorkflowTestResult>(`/api/workflows/${workflowId}/test`);
+}
+
+export function activateWorkflow(workflowId: string) {
+  return api.patch<unknown>(`/api/workflows/${workflowId}`, { status: "active" });
 }
