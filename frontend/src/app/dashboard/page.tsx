@@ -7,6 +7,7 @@ import { StatusBar } from "@/components/dashboard/StatusBar";
 import { StatsGrid } from "@/components/dashboard/StatsGrid";
 import { WorkflowCard } from "@/components/dashboard/WorkflowCard";
 import { ActivityEntry } from "@/components/dashboard/ActivityEntry";
+import { ChainCard } from "@/components/dashboard/ChainCard";
 
 interface DashboardSummary {
   greeting_time: string;
@@ -42,10 +43,14 @@ interface DashboardSummary {
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardSummary | null>(null);
+  const [chains, setChains] = useState<{id: string; name: string; description: string | null; workflow_count: number; overall_status: string}[]>([]);
 
   useEffect(() => {
     api.get<DashboardSummary>("/api/dashboard/summary")
       .then(setData)
+      .catch(() => {});
+    api.get<typeof chains>("/api/chains")
+      .then(setChains)
       .catch(() => {});
   }, []);
 
@@ -103,6 +108,25 @@ export default function DashboardPage() {
           </div>
         )}
       </section>
+
+      {/* Journeys */}
+      {chains.length > 0 && (
+        <section>
+          <h2 className="text-lg font-semibold text-foreground mb-4">Journeys</h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            {chains.map((c) => (
+              <ChainCard
+                key={c.id}
+                id={c.id}
+                name={c.name}
+                description={c.description}
+                workflowCount={c.workflow_count}
+                overallStatus={c.overall_status}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Recent Activity */}
       <section>

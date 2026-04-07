@@ -149,3 +149,11 @@ export function testWorkflow(workflowId: string) {
 export function activateWorkflow(workflowId: string) {
   return api.patch<unknown>(`/api/workflows/${workflowId}`, { status: "active" });
 }
+
+export function fetchChains() {
+  return api.get<unknown[]>("/api/chains");
+}
+
+export function fetchChain(id: string) {
+  return api.get<unknown>(`/api/chains/${id}`);
+}

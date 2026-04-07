@@ -7,6 +7,8 @@ from app.models.integration import Integration
 from app.models.calendar_event import CalendarEventCache
 from app.models.message_template import MessageTemplate
 from app.models.workflow_execution import WorkflowExecution
+from app.models.business_event import BusinessEvent
+from app.models.workflow_chain import WorkflowChain, WorkflowChainLink
 
 __all__ = [
     "User",
@@ -20,4 +22,7 @@ __all__ = [
     "CalendarEventCache",
     "MessageTemplate",
     "WorkflowExecution",
+    "BusinessEvent",
+    "WorkflowChain",
+    "WorkflowChainLink",
 ]
