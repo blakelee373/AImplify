@@ -25,4 +25,63 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
+
+  patch<T>(path: string, body: unknown): Promise<T> {
+    return request<T>(path, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  },
+
+  delete<T>(path: string): Promise<T> {
+    return request<T>(path, { method: "DELETE" });
+  },
 };
+
+// --- Typed API functions ---
+
+export interface ConversationSummary {
+  id: string;
+  title: string | null;
+  workflow_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessageData {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ConversationDetail {
+  id: string;
+  title: string | null;
+  workflow_id: string | null;
+  created_at: string;
+  messages: MessageData[];
+}
+
+export interface ChatResult {
+  response: string;
+  conversation_id: string;
+  message_id: string;
+  workflow_saved: boolean;
+}
+
+export function fetchConversations() {
+  return api.get<ConversationSummary[]>("/api/conversations");
+}
+
+export function fetchConversation(id: string) {
+  return api.get<ConversationDetail>(`/api/conversations/${id}`);
+}
+
+export function sendMessage(message: string, conversationId: string | null) {
+  return api.post<ChatResult>("/api/chat", {
+    message,
+    conversation_id: conversationId,
+  });
+}
