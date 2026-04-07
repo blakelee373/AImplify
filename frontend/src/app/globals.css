@@ -1,34 +1,96 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #111827;
-  --sidebar-bg: #1e293b;
-  --sidebar-text: #e2e8f0;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
+  --background: #fafaf9;
+  --foreground: #1c1917;
+  --primary: #f59e0b;
+  --primary-hover: #d97706;
+  --primary-light: #fef3c7;
+  --surface: #ffffff;
+  --sidebar-bg: #1c1917;
+  --sidebar-text: #e7e5e4;
+  --sidebar-hover: rgba(255, 255, 255, 0.08);
+  --sidebar-active: rgba(255, 255, 255, 0.15);
+  --border: #e7e5e4;
+  --text-muted: #78716c;
+  --user-bubble: #f59e0b;
+  --user-bubble-text: #ffffff;
+  --assistant-bubble: #ffffff;
+  --assistant-bubble-border: #e7e5e4;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --color-sidebar-bg: var(--sidebar-bg);
-  --color-sidebar-text: var(--sidebar-text);
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
-  --font-sans: var(--font-geist-sans);
+  --color-primary-light: var(--primary-light);
+  --color-surface: var(--surface);
+  --color-sidebar-bg: var(--sidebar-bg);
+  --color-sidebar-text: var(--sidebar-text);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-border: var(--border);
+  --color-text-muted: var(--text-muted);
+  --color-user-bubble: var(--user-bubble);
+  --color-user-bubble-text: var(--user-bubble-text);
+  --color-assistant-bubble: var(--assistant-bubble);
+  --color-assistant-bubble-border: var(--assistant-bubble-border);
+  --font-sans: var(--font-plus-jakarta);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans, Arial, Helvetica, sans-serif);
+}
+
+/* Typing indicator animation */
+@keyframes bounce-dot {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+/* Message entrance animation */
+@keyframes fade-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-message {
+  animation: fade-slide-up 0.25s ease-out;
+}
+
+/* Toast entrance */
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-toast {
+  animation: slide-in-right 0.3s ease-out;
+}
+
+/* Scrollbar styling */
+.chat-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: #d6d3d1;
+  border-radius: 3px;
 }
