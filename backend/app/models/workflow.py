@@ -1,8 +1,7 @@
-import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 
-from sqlalchemy import String, DateTime, ForeignKey, Text, JSON, Integer, Enum
+from sqlalchemy import String, ForeignKey, Text, JSON, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -11,36 +10,33 @@ from app.database import Base
 class Workflow(Base):
     __tablename__ = "workflows"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    business_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("businesses.id"), nullable=True)
-    name: Mapped[str] = mapped_column(String, nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[Optional[int]] = mapped_column(ForeignKey("businesses.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(
-        Enum("draft", "testing", "active", "paused", name="workflow_status"),
-        default="draft",
-    )
-    trigger_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    trigger_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft, testing, active, paused
+    trigger_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     trigger_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    conditions: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    business = relationship("Business", back_populates="workflows")
-    steps = relationship("WorkflowStep", back_populates="workflow", order_by="WorkflowStep.step_order")
+    business: Mapped[Optional["Business"]] = relationship(back_populates="workflows")
+    steps: Mapped[List["WorkflowStep"]] = relationship(
+        back_populates="workflow", order_by="WorkflowStep.step_order"
+    )
 
 
 class WorkflowStep(Base):
     __tablename__ = "workflow_steps"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    workflow_id: Mapped[str] = mapped_column(String, ForeignKey("workflows.id"), nullable=False)
-    step_order: Mapped[int] = mapped_column(Integer, nullable=False)
-    action_type: Mapped[str] = mapped_column(String, nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workflow_id: Mapped[int] = mapped_column(ForeignKey("workflows.id"))
+    step_order: Mapped[int] = mapped_column(Integer)
+    action_type: Mapped[str] = mapped_column(String(100))
     action_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    workflow = relationship("Workflow", back_populates="steps")
+    workflow: Mapped["Workflow"] = relationship(back_populates="steps")

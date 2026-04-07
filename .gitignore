@@ -1,27 +1,63 @@
 # Dependencies
 node_modules/
-venv/
-__pycache__/
-*.pyc
+.pnp
+.pnp.js
 
-# Environment
+# Build and output
+.next/
+out/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Environment and secrets
 .env
 .env.local
-
-# Build output
-.next/
-.vercel/
-dist/
+.env.development
+.env.production
+.env*.local
 
 # Database
 *.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+env/
+.Python
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Vercel
+.vercel
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Misc
+*.pem
+.cache/

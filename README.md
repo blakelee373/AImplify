@@ -1,41 +1,27 @@
 # AImplify
 
-AI operations layer for small businesses. Non-technical owners describe how their business works in plain conversation, and AImplify builds and deploys AI agents to automate their repetitive tasks across their existing tools.
+AI operations layer for small businesses. Describe how your business works in plain conversation, and AImplify builds AI agents to handle your repetitive tasks.
 
-## Project Structure
+## Tech Stack
 
-```
-AImplify/
-├── frontend/    # Next.js (TypeScript, Tailwind CSS) → deployed to Vercel
-├── backend/     # FastAPI (Python, SQLAlchemy) → deployed to Railway/Render/Fly.io
-└── docker-compose.yml
-```
+- **Frontend:** Next.js 16 (App Router), TypeScript, Tailwind CSS v4
+- **Backend:** Python, FastAPI, SQLAlchemy, SQLite
+- **AI:** Anthropic Claude API
+- **Deployment:** Vercel (frontend), TBD (backend)
 
 ## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- Python 3.11+
-- An [Anthropic API key](https://console.anthropic.com/)
 
 ### Backend
 
 ```bash
 cd backend
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
-
-# Run the server
 uvicorn app.main:app --reload
 ```
 
-The API runs at **http://localhost:8000**. Database tables are auto-created on first startup.
+Backend runs at `http://localhost:8000`. Hit `/health` to verify.
 
 ### Frontend
 
@@ -45,36 +31,32 @@ npm install
 npm run dev
 ```
 
-The app runs at **http://localhost:3000**.
+Frontend runs at `http://localhost:3000`.
 
-### Verify Everything Works
+### Environment Variables
 
-1. Backend health check: `curl http://localhost:8000/health`
-2. Open http://localhost:3000 — you should see the welcome page
-3. Click "Start Chatting" to open the chat interface
-4. Send a message — it should round-trip through the backend to Claude and back
+Copy the `.env.example` in `backend/` and fill in your keys:
 
-## Tech Stack
+```
+ANTHROPIC_API_KEY=your-key-here
+DATABASE_URL=sqlite:///aImplify.db
+FRONTEND_URL=http://localhost:3000
+```
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Next.js 16, TypeScript, Tailwind CSS v4 |
-| Backend | FastAPI, SQLAlchemy, Python |
-| Database | SQLite (swappable to PostgreSQL) |
-| AI | Anthropic Claude API |
+The frontend uses `NEXT_PUBLIC_API_URL` to point to the backend (defaults to `http://localhost:8000`).
 
-## Environment Variables
+## Project Structure
 
-### Backend (`backend/.env`)
-
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key |
-| `DATABASE_URL` | SQLAlchemy connection string (default: `sqlite:///aImplify.db`) |
-| `FRONTEND_URL` | Frontend origin for CORS (default: `http://localhost:3000`) |
-
-### Frontend
-
-| Variable | Description |
-|----------|-------------|
-| `NEXT_PUBLIC_API_URL` | Backend URL (default: `http://localhost:8000`) |
+```
+AImplify/
+├── frontend/          # Next.js app (Vercel)
+│   ├── src/app/       # App Router pages
+│   ├── src/components/# UI components
+│   └── src/lib/       # API client, utilities
+├── backend/           # FastAPI app
+│   ├── app/models/    # SQLAlchemy models
+│   ├── app/routers/   # API endpoints
+│   ├── app/services/  # Business logic (AI engine, workflows)
+│   └── app/integrations/ # Third-party connectors
+└── CLAUDE.md          # AI assistant instructions
+```
