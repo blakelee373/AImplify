@@ -1,45 +1,44 @@
 from typing import Optional, List
-from pydantic import BaseModel
 from datetime import datetime
+from pydantic import BaseModel
 
 
 class ChatRequest(BaseModel):
     message: str
-    conversation_id: Optional[str] = None
-
-
-class ChatResponse(BaseModel):
-    response: str
-    conversation_id: str
-    message_id: str
-    workflow_saved: bool = False
+    conversation_id: Optional[int] = None
 
 
 class MessageResponse(BaseModel):
-    id: str
+    id: int
     role: str
     content: str
-    metadata: Optional[dict] = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    class Config:
+        from_attributes = True
+
+
+class ChatResponse(BaseModel):
+    conversation_id: int
+    message: MessageResponse
 
 
 class ConversationSummary(BaseModel):
-    id: str
-    title: Optional[str] = None
-    workflow_id: Optional[str] = None
+    id: int
+    title: Optional[str]
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    class Config:
+        from_attributes = True
 
 
 class ConversationDetail(BaseModel):
-    id: str
-    title: Optional[str] = None
-    workflow_id: Optional[str] = None
+    id: int
+    title: Optional[str]
     created_at: datetime
-    messages: List[MessageResponse] = []
+    updated_at: datetime
+    messages: List[MessageResponse]
 
-    model_config = {"from_attributes": True}
+    class Config:
+        from_attributes = True

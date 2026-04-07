@@ -1,8 +1,7 @@
-import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 
-from sqlalchemy import String, DateTime, ForeignKey, Text, JSON, Enum
+from sqlalchemy import String, ForeignKey, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -11,27 +10,29 @@ from app.database import Base
 class Conversation(Base):
     __tablename__ = "conversations"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    business_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("businesses.id"), nullable=True)
-    workflow_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("workflows.id"), nullable=True)
-    title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[Optional[int]] = mapped_column(ForeignKey("businesses.id"), nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    business = relationship("Business", back_populates="conversations")
-    messages = relationship("Message", back_populates="conversation", order_by="Message.created_at")
+    business: Mapped[Optional["Business"]] = relationship(back_populates="conversations")
+    messages: Mapped[List["Message"]] = relationship(
+        back_populates="conversation", order_by="Message.created_at"
+    )
 
 
 class Message(Base):
     __tablename__ = "messages"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    conversation_id: Mapped[str] = mapped_column(String, ForeignKey("conversations.id"), nullable=False)
-    role: Mapped[str] = mapped_column(Enum("user", "assistant", name="message_role"), nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"))
+    role: Mapped[str] = mapped_column(String(20))  # "user" or "assistant"
+    content: Mapped[str] = mapped_column(Text)
+    metadata_json: Mapped[Optional[str]] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
 
-    conversation = relationship("Conversation", back_populates="messages")
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")

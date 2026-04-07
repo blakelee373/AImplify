@@ -1,16 +1,15 @@
-import { Suspense } from "react";
-import { ChatView } from "@/components/ChatView";
+import { ChatWindow } from "@/components/ChatWindow";
 
 export default function ChatPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center h-full text-text-muted">
-          Loading...
-        </div>
-      }
-    >
-      <ChatView />
-    </Suspense>
+    <div className="flex flex-col h-screen">
+      <div className="border-b border-stone-200 px-6 py-4">
+        <h1 className="text-xl font-semibold text-stone-900">Chat</h1>
+        <p className="text-sm text-stone-500">
+          Tell me about a task you or your staff do repeatedly
+        </p>
+      </div>
+      <ChatWindow />
+    </div>
   );
 }
