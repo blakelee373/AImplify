@@ -1,6 +1,7 @@
 """Integration management — connect, disconnect, OAuth callbacks."""
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
@@ -19,6 +20,11 @@ from app.services.integration_manager import list_available_integrations
 from app.integrations.google_calendar import google_calendar
 from app.integrations.gmail import gmail
 from app.integrations.twilio_sms import twilio_sms
+from app.integrations.booking.square import square_appointments
+from app.integrations.booking.boulevard import boulevard
+from app.integrations.crm.hubspot import hubspot
+from app.integrations.payments.stripe_integration import stripe_integration
+from app.integrations.reviews.google_reviews import google_reviews
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -98,12 +104,44 @@ class TwilioCredentials(BaseModel):
     phone_number: str
 
 
+class APIKeyCredentials(BaseModel):
+    secret_key: str
+
+
+class BookingAPICredentials(BaseModel):
+    api_key: str
+    business_id: Optional[str] = None
+
+
 @router.post("/integrations/connect/twilio")
 async def connect_twilio(creds: TwilioCredentials):
-    """Validate and store Twilio credentials."""
     success = await twilio_sms.connect(None, creds.dict())
     if not success:
         raise HTTPException(400, "Invalid Twilio credentials")
+    return {"status": "connected"}
+
+
+@router.post("/integrations/connect/stripe")
+async def connect_stripe(creds: APIKeyCredentials):
+    success = await stripe_integration.connect(None, creds.dict())
+    if not success:
+        raise HTTPException(400, "Invalid Stripe credentials")
+    return {"status": "connected"}
+
+
+@router.post("/integrations/connect/square")
+async def connect_square(creds: APIKeyCredentials):
+    success = await square_appointments.connect(None, {"access_token": creds.secret_key})
+    if not success:
+        raise HTTPException(400, "Invalid Square credentials")
+    return {"status": "connected"}
+
+
+@router.post("/integrations/connect/boulevard")
+async def connect_boulevard(creds: BookingAPICredentials):
+    success = await boulevard.connect(None, creds.dict())
+    if not success:
+        raise HTTPException(400, "Invalid Boulevard credentials")
     return {"status": "connected"}
 
 
@@ -120,6 +158,16 @@ async def disconnect_integration(integration_type: str):
         await google_calendar.disconnect(None)
     elif integration_type == "twilio_sms":
         await twilio_sms.disconnect(None)
+    elif integration_type == "stripe":
+        await stripe_integration.disconnect(None)
+    elif integration_type == "square_appointments":
+        await square_appointments.disconnect(None)
+    elif integration_type == "boulevard":
+        await boulevard.disconnect(None)
+    elif integration_type == "hubspot":
+        await hubspot.disconnect(None)
+    elif integration_type == "google_reviews":
+        await google_reviews.disconnect(None)
     else:
         raise HTTPException(404, "Unknown integration type")
     return {"status": "disconnected"}
@@ -133,6 +181,11 @@ async def test_integration(integration_type: str):
         "google_calendar": google_calendar,
         "gmail": gmail,
         "twilio_sms": twilio_sms,
+        "stripe": stripe_integration,
+        "square_appointments": square_appointments,
+        "boulevard": boulevard,
+        "hubspot": hubspot,
+        "google_reviews": google_reviews,
     }
     integration = integration_map.get(integration_type)
     if not integration:

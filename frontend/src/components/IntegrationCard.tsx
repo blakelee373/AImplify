@@ -14,6 +14,12 @@ const ICONS: Record<string, string> = {
   google_calendar: "📅",
   gmail: "✉️",
   twilio_sms: "💬",
+  square_appointments: "📋",
+  boulevard: "💈",
+  vagaro: "💇",
+  hubspot: "🧲",
+  stripe: "💳",
+  google_reviews: "⭐",
 };
 
 const STATUS_STYLES: Record<string, { dot: string; label: string; labelColor: string }> = {

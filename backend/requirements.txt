@@ -9,3 +9,8 @@ google-auth-httplib2
 google-api-python-client
 twilio
 cryptography
+squareup
+stripe
+hubspot-api-client
+gql[requests]
+httpx

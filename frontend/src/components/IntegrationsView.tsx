@@ -6,6 +6,7 @@ import Link from "next/link";
 import { IntegrationCard } from "@/components/IntegrationCard";
 import { TwilioSetupModal } from "@/components/TwilioSetupModal";
 import {
+  api,
   fetchIntegrations,
   connectGoogle,
   connectTwilio,
@@ -46,11 +47,20 @@ export function IntegrationsView() {
   async function handleConnect(name: string) {
     setLoading(true);
     try {
-      if (name === "google_calendar" || name === "gmail") {
+      if (name === "google_calendar" || name === "gmail" || name === "google_reviews") {
         const data = await connectGoogle();
         window.location.href = data.auth_url;
       } else if (name === "twilio_sms") {
         setTwilioOpen(true);
+      } else if (name === "stripe" || name === "square_appointments" || name === "boulevard" || name === "hubspot") {
+        // API key integrations — use the same TwilioSetupModal pattern with a generic prompt
+        const key = prompt(`Enter your ${name.replace("_", " ")} API key:`);
+        if (key) {
+          const endpoint = name === "stripe" ? "stripe" : name === "square_appointments" ? "square" : name;
+          await api.post(`/api/integrations/connect/${endpoint}`, { secret_key: key, api_key: key });
+          setSuccessMsg(`${name.replace("_", " ")} connected!`);
+          await loadIntegrations();
+        }
       }
     } catch {
       setSuccessMsg("Failed to connect. Please try again.");
