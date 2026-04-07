@@ -12,6 +12,7 @@ class Workflow(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     business_id: Mapped[Optional[int]] = mapped_column(ForeignKey("businesses.id"), nullable=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(ForeignKey("conversations.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft, testing, active, paused

@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -12,7 +12,12 @@ from app.schemas.chat import (
     ConversationDetail,
     MessageResponse,
 )
-from app.services.ai_engine import get_ai_response
+from app.services.ai_engine import (
+    get_ai_response,
+    parse_ai_response,
+    extract_workflow_from_conversation,
+)
+from app.services.workflow_engine import create_workflow_from_draft
 
 router = APIRouter(prefix="/api")
 
@@ -46,14 +51,32 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     messages = [{"role": m.role, "content": m.content} for m in history]
 
-    # Get AI response
-    ai_content = await get_ai_response(messages)
+    # Get AI response and parse for signal tags
+    raw_content = await get_ai_response(messages)
+    clean_content, workflow_ready, workflow_confirmed = parse_ai_response(raw_content)
+
+    # Build metadata based on signal flags
+    metadata = None
+
+    if workflow_ready:
+        # Run the hidden extraction call to get structured workflow data
+        draft = await extract_workflow_from_conversation(messages)
+        if draft:
+            metadata = {"message_type": "workflow_summary", "workflow_draft": draft}
+
+    if workflow_confirmed:
+        # Find the most recent workflow draft in this conversation
+        draft = _find_latest_draft(db, conversation.id)
+        if draft:
+            workflow = create_workflow_from_draft(db, draft, conversation.id)
+            metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
 
     # Save assistant message
     assistant_message = Message(
         conversation_id=conversation.id,
         role="assistant",
-        content=ai_content,
+        content=clean_content,
+        metadata_json=metadata,
     )
     db.add(assistant_message)
 
@@ -68,6 +91,20 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         conversation_id=conversation.id,
         message=MessageResponse.model_validate(assistant_message),
     )
+
+
+def _find_latest_draft(db: Session, conversation_id: int) -> Optional[dict]:
+    """Walk backward through conversation messages to find the most recent workflow draft."""
+    messages = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).all()
+
+    for msg in messages:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "workflow_summary":
+                return msg.metadata_json.get("workflow_draft")
+    return None
 
 
 @router.get("/conversations", response_model=List[ConversationSummary])
