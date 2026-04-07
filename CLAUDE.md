@@ -13,9 +13,14 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - Target Python 3.9 — use `Optional[str]` not `str | None`, `List[str]` not `list[str]`, `timezone.utc` not `datetime.UTC`
 
 ## Phase Response Requirements
-- At the end of EVERY phase response, provide a bullet-pointed list in layman's terms of the physical changes the user should see in the Vercel deployment. Example format:
+- At the end of EVERY phase response, provide TWO bullet-pointed lists in layman's terms:
 
 ### What you'll see on the deployment:
 - The chat page now shows a text box and send button
 - Messages you type appear on screen with AI responses below them
 - A new "Dashboard" link appears in the sidebar
+
+### What you can now do:
+- Type a message in the chat and get an AI response back
+- Switch between conversations using the sidebar
+- Pause a workflow from the dashboard with one click
