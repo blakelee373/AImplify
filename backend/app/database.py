@@ -27,7 +27,7 @@ _MIGRATIONS = [
 
 def init_db():
     """Create all tables if they don't exist, then run migrations."""
-    from app.models import user, business, conversation, workflow, activity_log  # noqa: F401
+    from app.models import user, business, conversation, workflow, activity_log, integration  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
     # Run pending migrations (skip if column already exists)
