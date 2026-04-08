@@ -19,7 +19,7 @@ AI operations layer for medspas. Owners describe how their business works in pla
 ## Signal Tag System
 - AI embeds hidden XML tags in responses (e.g., `<action_request>send_email</action_request>`) to trigger backend actions
 - Tags are parsed in `parse_ai_response()` in `ai_engine.py`, stripped from user-visible content
-- Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`
+- Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`
 - New action types must be added to: `ACTION_EXTRACTION_TOOLS` (ai_engine.py), `ACTION_PROVIDER` map (chat.py), `_execute_chat_action` (chat.py), `ACTION_LABELS` (MessageBubble.tsx)
 
 ## Tool Connection System

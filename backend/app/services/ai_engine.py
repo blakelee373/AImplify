@@ -203,6 +203,51 @@ When the user confirms ("yes," "go ahead," "do it"):
 
 If the user says "no" or changes their mind, acknowledge it and move on.
 
+WORKFLOW QUERIES — CHECK STATUS, LIST, ACTIVITY, AND RUN:
+
+IMPORTANT: You HAVE full access to the owner's workflow list, activity history, and the ability \
+to run workflows manually. The system handles fetching and displaying this data when you use the \
+tags below. NEVER say you can't see workflows, activity logs, performance data, or run history. \
+You CAN — just use the appropriate tag and the system will show the data to the user.
+
+Recognize requests like:
+- "Show me my workflows" or "What workflows do I have?" → list all workflows
+- "What has the system been doing?" or "Show me recent activity" → activity summary
+- "How is the welcome email workflow performing?" or "What's the status of reminders?" → specific workflow status
+- "Run the welcome workflow for Jane at jane@example.com" → manual workflow execution
+
+For LISTING workflows:
+When the user asks to see their workflows, respond with something like "Here's what you have set up:" \
+and append this hidden tag on its own line:
+<workflow_list>true</workflow_list>
+Do NOT ask for confirmation — just show them. NEVER list workflows in plain text — always use the tag.
+
+For ACTIVITY SUMMARY:
+When the user asks what the system has been doing or wants a general activity report, respond with \
+something like "Here's what's been happening lately:" and append:
+<workflow_activity>true</workflow_activity>
+Do NOT ask for confirmation — just show them. NEVER say you can't see activity — use the tag.
+
+For SPECIFIC WORKFLOW STATUS:
+When the user asks about a specific workflow's performance or status, respond with something like \
+"Let me pull that up for you:" and append:
+<workflow_status>WORKFLOW_NAME</workflow_status>
+Replace WORKFLOW_NAME with the name as you understood it from the user.
+Do NOT ask for confirmation — just show them. NEVER say you don't have performance data — use the tag.
+
+For RUNNING A WORKFLOW MANUALLY:
+The owner CAN run any workflow manually with runtime context. When they ask (like "run the welcome \
+workflow for Jane at jane@example.com"):
+1. Confirm: "Got it — you'd like to run the [workflow name] for [context]. Ready to go?"
+2. Append: <workflow_run>WORKFLOW_NAME</workflow_run>
+NEVER say workflows can only run automatically — the owner CAN trigger them manually.
+
+When the user confirms ("yes", "go ahead"):
+1. Respond with something short like "Running it now!"
+2. Append: <workflow_run_confirmed>WORKFLOW_NAME</workflow_run_confirmed>
+
+If the user says "no" or changes their mind, acknowledge it and move on.
+
 TOOL CONNECTIONS — CONNECT OR DISCONNECT TOOLS:
 
 Available tools that can be connected: Gmail, Google Calendar.
@@ -374,6 +419,30 @@ def parse_ai_response(raw_content: str) -> dict:
     if disconnect_confirmed_match:
         disconnect_confirmed = disconnect_confirmed_match.group(1)
 
+    # Extract workflow_list (boolean, like workflow_ready)
+    workflow_list = "<workflow_list>true</workflow_list>" in raw_content
+
+    # Extract workflow_activity (boolean)
+    workflow_activity = "<workflow_activity>true</workflow_activity>" in raw_content
+
+    # Extract workflow_status (e.g., <workflow_status>New client welcome</workflow_status>)
+    workflow_status = None
+    workflow_status_match = re.search(r"<workflow_status>(.+?)</workflow_status>", raw_content)
+    if workflow_status_match:
+        workflow_status = workflow_status_match.group(1).strip()
+
+    # Extract workflow_run (e.g., <workflow_run>New client welcome</workflow_run>)
+    workflow_run = None
+    workflow_run_match = re.search(r"<workflow_run>(.+?)</workflow_run>", raw_content)
+    if workflow_run_match:
+        workflow_run = workflow_run_match.group(1).strip()
+
+    # Extract workflow_run_confirmed (e.g., <workflow_run_confirmed>New client welcome</workflow_run_confirmed>)
+    workflow_run_confirmed = None
+    workflow_run_confirmed_match = re.search(r"<workflow_run_confirmed>(.+?)</workflow_run_confirmed>", raw_content)
+    if workflow_run_confirmed_match:
+        workflow_run_confirmed = workflow_run_confirmed_match.group(1).strip()
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
@@ -391,6 +460,14 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(disconnect_match.group(0), "")
     if disconnect_confirmed_match:
         clean = clean.replace(disconnect_confirmed_match.group(0), "")
+    clean = clean.replace("<workflow_list>true</workflow_list>", "")
+    clean = clean.replace("<workflow_activity>true</workflow_activity>", "")
+    if workflow_status_match:
+        clean = clean.replace(workflow_status_match.group(0), "")
+    if workflow_run_match:
+        clean = clean.replace(workflow_run_match.group(0), "")
+    if workflow_run_confirmed_match:
+        clean = clean.replace(workflow_run_confirmed_match.group(0), "")
     clean = clean.strip()
 
     return {
@@ -404,6 +481,11 @@ def parse_ai_response(raw_content: str) -> dict:
         "connect_tool": connect_tool,
         "disconnect_tool": disconnect_tool,
         "disconnect_confirmed": disconnect_confirmed,
+        "workflow_list": workflow_list,
+        "workflow_activity": workflow_activity,
+        "workflow_status": workflow_status,
+        "workflow_run": workflow_run,
+        "workflow_run_confirmed": workflow_run_confirmed,
     }
 
 
@@ -498,6 +580,22 @@ ACTION_EXTRACTION_TOOLS = {
     },
 }
 
+CONTEXT_EXTRACTION_TOOL = {
+    "name": "extract_context",
+    "description": "Extract runtime context for manual workflow execution from the conversation.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "client_name": {"type": "string", "description": "Client/patient name mentioned"},
+            "client_email": {"type": "string", "description": "Client/patient email address"},
+            "client_phone": {"type": "string", "description": "Client/patient phone number"},
+            "appointment_date": {"type": "string", "description": "Date/time mentioned, ISO 8601"},
+            "notes": {"type": "string", "description": "Any additional context mentioned"},
+        },
+        "required": [],
+    },
+}
+
 ACTION_EXTRACTION_PROMPT = """\
 You are a parameter extraction system. Analyze the conversation and extract the \
 exact parameters needed to execute the requested action. Use the provided tool to \
@@ -578,6 +676,28 @@ async def extract_action_from_conversation(
         return None
     except Exception:
         return None
+
+
+async def extract_run_context_from_conversation(
+    messages: List[Dict[str, str]], timezone: str = "UTC"
+) -> dict:
+    """Extract runtime context (client name, email, etc.) for manual workflow execution."""
+    try:
+        response = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system="You are a context extraction system. Analyze the conversation and extract any runtime context the user provided for running a workflow — like client name, email, phone, appointment date, or notes. Use the extract_context tool to output the result. Only include fields that were explicitly mentioned.",
+            messages=messages,
+            tools=[CONTEXT_EXTRACTION_TOOL],
+            tool_choice={"type": "tool", "name": "extract_context"},
+        )
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "extract_context":
+                # Filter out empty values
+                return {k: v for k, v in block.input.items() if v}
+        return {}
+    except Exception:
+        return {}
 
 
 def match_workflow_by_name(db_workflows: list, name_query: str) -> Optional[object]:
@@ -703,7 +823,14 @@ async def get_ai_response(
     if workflow_names:
         wf_list = ", ".join(f'"{n}"' for n in workflow_names)
         system += f"\n\nThe owner currently has these saved processes: {wf_list}. " \
-                  "Use the exact name when referencing them in <workflow_manage> tags."
+                  "Use the exact name when referencing them in <workflow_manage>, " \
+                  "<workflow_status>, and <workflow_run> tags. " \
+                  "You CAN list these workflows (<workflow_list>), check their activity " \
+                  "(<workflow_status>), show recent system activity (<workflow_activity>), " \
+                  "and run them manually (<workflow_run>). NEVER say you can't do these things."
+    else:
+        system += "\n\nThe owner has no saved processes yet. If they ask to see their workflows, " \
+                  "still use <workflow_list>true</workflow_list> — the system will show an empty state."
 
     response = await client.messages.create(
         model=CLAUDE_MODEL,
