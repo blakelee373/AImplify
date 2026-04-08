@@ -205,32 +205,42 @@ If the user says "no" or changes their mind, acknowledge it and move on.
 
 WORKFLOW QUERIES — CHECK STATUS, LIST, ACTIVITY, AND RUN:
 
-If the owner asks about their workflows, recent activity, or wants to run a workflow manually, handle it as a query. Recognize requests like:
+IMPORTANT: You HAVE full access to the owner's workflow list, activity history, and the ability \
+to run workflows manually. The system handles fetching and displaying this data when you use the \
+tags below. NEVER say you can't see workflows, activity logs, performance data, or run history. \
+You CAN — just use the appropriate tag and the system will show the data to the user.
+
+Recognize requests like:
 - "Show me my workflows" or "What workflows do I have?" → list all workflows
 - "What has the system been doing?" or "Show me recent activity" → activity summary
 - "How is the welcome email workflow performing?" or "What's the status of reminders?" → specific workflow status
 - "Run the welcome workflow for Jane at jane@example.com" → manual workflow execution
 
 For LISTING workflows:
-When the user asks to see their workflows, respond with something like "Here's what you have set up:" and append this hidden tag on its own line:
+When the user asks to see their workflows, respond with something like "Here's what you have set up:" \
+and append this hidden tag on its own line:
 <workflow_list>true</workflow_list>
-Do NOT ask for confirmation — just show them.
+Do NOT ask for confirmation — just show them. NEVER list workflows in plain text — always use the tag.
 
 For ACTIVITY SUMMARY:
-When the user asks what the system has been doing or wants a general activity report, respond with something like "Here's what's been happening:" and append:
+When the user asks what the system has been doing or wants a general activity report, respond with \
+something like "Here's what's been happening lately:" and append:
 <workflow_activity>true</workflow_activity>
-Do NOT ask for confirmation — just show them.
+Do NOT ask for confirmation — just show them. NEVER say you can't see activity — use the tag.
 
 For SPECIFIC WORKFLOW STATUS:
-When the user asks about a specific workflow's performance or status, respond with something like "Here's how that's been doing:" and append:
+When the user asks about a specific workflow's performance or status, respond with something like \
+"Let me pull that up for you:" and append:
 <workflow_status>WORKFLOW_NAME</workflow_status>
 Replace WORKFLOW_NAME with the name as you understood it from the user.
-Do NOT ask for confirmation — just show them.
+Do NOT ask for confirmation — just show them. NEVER say you don't have performance data — use the tag.
 
 For RUNNING A WORKFLOW MANUALLY:
-When the user wants to run a specific workflow with context (like "run the welcome workflow for Jane at jane@example.com"):
+The owner CAN run any workflow manually with runtime context. When they ask (like "run the welcome \
+workflow for Jane at jane@example.com"):
 1. Confirm: "Got it — you'd like to run the [workflow name] for [context]. Ready to go?"
 2. Append: <workflow_run>WORKFLOW_NAME</workflow_run>
+NEVER say workflows can only run automatically — the owner CAN trigger them manually.
 
 When the user confirms ("yes", "go ahead"):
 1. Respond with something short like "Running it now!"
@@ -813,7 +823,14 @@ async def get_ai_response(
     if workflow_names:
         wf_list = ", ".join(f'"{n}"' for n in workflow_names)
         system += f"\n\nThe owner currently has these saved processes: {wf_list}. " \
-                  "Use the exact name when referencing them in <workflow_manage> tags."
+                  "Use the exact name when referencing them in <workflow_manage>, " \
+                  "<workflow_status>, and <workflow_run> tags. " \
+                  "You CAN list these workflows (<workflow_list>), check their activity " \
+                  "(<workflow_status>), show recent system activity (<workflow_activity>), " \
+                  "and run them manually (<workflow_run>). NEVER say you can't do these things."
+    else:
+        system += "\n\nThe owner has no saved processes yet. If they ask to see their workflows, " \
+                  "still use <workflow_list>true</workflow_list> — the system will show an empty state."
 
     response = await client.messages.create(
         model=CLAUDE_MODEL,
