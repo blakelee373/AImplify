@@ -47,8 +47,11 @@ export function ConversationList({
     }
   }
 
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   async function handleDelete(id: number) {
     setDeletingId(id);
+    setDeleteError(null);
     try {
       await api.delete(`/api/conversations/${id}`);
       setConversations((prev) => prev.filter((c) => c.id !== id));
@@ -57,7 +60,8 @@ export function ConversationList({
         onNew();
       }
     } catch {
-      // Silently fail — conversation might already be gone
+      setDeleteError("Failed to delete. Try again.");
+      setConfirmDeleteId(null);
     } finally {
       setDeletingId(null);
     }
@@ -96,6 +100,13 @@ export function ConversationList({
         </div>
       </div>
 
+      {/* Error banner */}
+      {deleteError && (
+        <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-red-50 text-red-700 text-xs border border-red-200">
+          {deleteError}
+        </div>
+      )}
+
       {/* Conversation list */}
       <div className="flex-1 overflow-y-auto">
         {loading && conversations.length === 0 && (
@@ -126,55 +137,64 @@ export function ConversationList({
                     : "hover:bg-stone-100 border border-transparent"
                 }`}
               >
-                <button
-                  onClick={() => onSelect(conv.id)}
-                  className="w-full text-left px-3 py-3"
-                >
-                  <div className="flex items-start gap-2.5">
-                    <MessageSquare
-                      className={`w-4 h-4 shrink-0 mt-0.5 ${
-                        isActive ? "text-primary" : "text-stone-400"
-                      }`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p
-                        className={`text-sm font-medium truncate ${
-                          isActive ? "text-stone-900" : "text-stone-700"
-                        }`}
+                {isConfirming ? (
+                  /* Delete confirmation replaces the entire row */
+                  <div className="flex items-center justify-between px-3 py-3">
+                    <span className="text-xs text-stone-600 font-medium truncate mr-2">
+                      Delete this conversation?
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => handleDelete(conv.id)}
+                        disabled={deletingId === conv.id}
+                        className="px-2 py-1 rounded text-xs font-medium bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
                       >
-                        {conv.title || "New conversation"}
-                      </p>
-                      <p className="text-xs text-stone-400 mt-0.5">
-                        {timeAgo(conv.updated_at)}
-                      </p>
+                        {deletingId === conv.id ? "..." : "Delete"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="px-2 py-1 rounded text-xs font-medium bg-stone-200 text-stone-600 hover:bg-stone-300 transition-colors"
+                      >
+                        Cancel
+                      </button>
                     </div>
                   </div>
-                </button>
-
-                {/* Delete button */}
-                {isConfirming ? (
-                  <div className="absolute inset-y-0 right-0 flex items-center gap-1 px-2 bg-stone-50 rounded-r-lg">
-                    <button
-                      onClick={() => handleDelete(conv.id)}
-                      disabled={deletingId === conv.id}
-                      className="px-2 py-1 rounded text-xs font-medium bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
-                    >
-                      {deletingId === conv.id ? "..." : "Delete"}
-                    </button>
-                    <button
-                      onClick={() => setConfirmDeleteId(null)}
-                      className="px-2 py-1 rounded text-xs font-medium bg-stone-200 text-stone-600 hover:bg-stone-300 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
                 ) : (
+                  /* Normal conversation row */
+                  <button
+                    onClick={() => onSelect(conv.id)}
+                    className="w-full text-left px-3 py-3"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <MessageSquare
+                        className={`w-4 h-4 shrink-0 mt-0.5 ${
+                          isActive ? "text-primary" : "text-stone-400"
+                        }`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className={`text-sm font-medium truncate ${
+                            isActive ? "text-stone-900" : "text-stone-700"
+                          }`}
+                        >
+                          {conv.title || "New conversation"}
+                        </p>
+                        <p className="text-xs text-stone-400 mt-0.5">
+                          {timeAgo(conv.updated_at)}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                )}
+
+                {/* Trash icon (only visible on hover, hidden during confirmation) */}
+                {!isConfirming && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       setConfirmDeleteId(conv.id);
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-stone-200 opacity-0 group-hover:opacity-100 transition-all"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-stone-200 opacity-0 group-hover:opacity-100 transition-all z-10"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
