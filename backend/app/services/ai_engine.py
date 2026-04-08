@@ -87,6 +87,14 @@ in this conversation — like adding attendees, changing the title, or sending i
 IMPORTANT: NEVER include <action_request> until you have confirmed ALL required fields with the user. \
 If you are still missing any field, just ask about it — no tags.
 
+NEVER include any hidden tags (<action_request>, <action_confirmed>, etc.) when the user is:
+- Asking about your capabilities ("can you check my calendar?", "do you have access to...?")
+- Complaining about or questioning a previous result ("why did it say that?", "that's wrong")
+- Making conversation or asking a follow-up about results you already fetched
+Only include action tags when the user is making a GENUINE NEW REQUEST to do something. \
+If you already checked their calendar and they ask about it, just refer to the [System: ...] \
+results you already have — do NOT re-execute the action.
+
 When the user confirms the action ("yes," "go ahead," "do it," "sounds good"):
 1. Respond with something short like "On it — let me take care of that!"
 2. At the very end of your message, append this hidden tag on its own line:
@@ -405,11 +413,18 @@ exact parameters needed to execute the requested action. Use the provided tool t
 output the result. Be precise — use the details the user provided.
 
 IMPORTANT: For dates and times, convert relative references (like "tomorrow", \
-"next Friday", "this afternoon") into full ISO 8601 timestamps using today's date \
-as reference. Today is {today}. The user's timezone is {timezone}. Always use this \
-timezone for the timestamps (e.g., if timezone is America/Chicago, use offset -05:00 \
-or -06:00 depending on DST). If a duration is given instead of an end time, calculate \
-the end time from the start time plus the duration.\
+"next Friday", "this afternoon") into full ISO 8601 timestamps. \
+The user's timezone is {timezone}. Always use this timezone for the timestamps \
+(e.g., if timezone is America/Chicago, use offset -05:00 or -06:00 depending on DST). \
+If a duration is given instead of an end time, calculate the end time from the start \
+time plus the duration.
+
+Use this EXACT day-to-date mapping — do NOT calculate dates yourself:
+{week_ref}
+
+For list_events: when the user asks about a specific day (e.g., "Friday"), set time_min \
+to the START of that day (00:00:00) and time_max to the END of that day (23:59:59) in \
+their timezone. ALWAYS provide time_min and time_max when a day is mentioned.\
 """
 
 
@@ -437,12 +452,23 @@ async def extract_action_from_conversation(
     if not tool:
         return None
 
+    from datetime import timedelta
+
     try:
-        today = datetime.now(ZoneInfo(timezone)).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+        now = datetime.now(ZoneInfo(timezone))
     except Exception:
-        today = datetime.now(tz.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+        now = datetime.now(tz.utc)
+
+    # Build 7-day reference so the model never has to do date arithmetic
+    day_lines = []
+    for i in range(7):
+        d = now + timedelta(days=i)
+        label = "Today" if i == 0 else "Tomorrow" if i == 1 else d.strftime("%A")
+        day_lines.append(f"- {label}: {d.strftime('%A, %B %d, %Y')}")
+    week_ref = "\n".join(day_lines)
+
     tz_info = _get_tz_info(timezone)
-    system_prompt = ACTION_EXTRACTION_PROMPT.format(today=today, timezone=tz_info)
+    system_prompt = ACTION_EXTRACTION_PROMPT.format(timezone=tz_info, week_ref=week_ref)
 
     try:
         response = await client.messages.create(
