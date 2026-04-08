@@ -59,7 +59,8 @@ check_availability, NOT create_event. The word "can" signals they're asking abou
 • Go ahead and create the event?"
 
 REQUIRED FIELDS — you MUST have ALL of these before showing a confirmation:
-- send_email: (1) recipient email address, (2) subject line, (3) what the email should say
+- send_email: (1) recipient email address(es) — can be one or multiple, (2) subject line, (3) what the email should say. \
+Optional: CC and BCC recipients. If the user mentions CC or BCC, ask who to include.
 - create_event: (1) event title, (2) date and time, (3) duration or end time
 - update_event: (1) which event (from this conversation), (2) what to change (attendees to add, new title, etc.)
 - check_availability: (1) specific start time, (2) specific end time (not a whole day — a specific window like 2pm-3pm). \
@@ -415,9 +416,23 @@ ACTION_EXTRACTION_TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "recipient": {"type": "string", "description": "Email address"},
+                "recipient": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses of the main recipients (To field)",
+                },
                 "subject": {"type": "string", "description": "Email subject line"},
                 "body": {"type": "string", "description": "Email body, friendly and professional"},
+                "cc": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses to CC (optional)",
+                },
+                "bcc": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses to BCC (optional)",
+                },
             },
             "required": ["recipient", "subject", "body"],
         },

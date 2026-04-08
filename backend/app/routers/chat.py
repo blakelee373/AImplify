@@ -489,14 +489,23 @@ async def _execute_chat_action(db: Session, action_meta: dict, conversation_id: 
 
     try:
         if action_type == "send_email":
-            result = send_email(db, params["recipient"], params["subject"], params["body"])
-            description = f"Sent email to {params['recipient']}: {params['subject']}"
+            recipient = params["recipient"]
+            cc = params.get("cc")
+            bcc = params.get("bcc")
+            result = send_email(db, recipient, params["subject"], params["body"], cc=cc, bcc=bcc)
+            # Build human-readable recipient description
+            to_str = ", ".join(recipient) if isinstance(recipient, list) else recipient
+            description = f"Sent email to {to_str}: {params['subject']}"
             details = {
-                "recipient": params["recipient"],
+                "recipient": recipient,
                 "subject": params["subject"],
                 "gmail_message_id": result.get("message_id"),
                 "source": "chat",
             }
+            if cc:
+                details["cc"] = cc
+            if bcc:
+                details["bcc"] = bcc
 
         elif action_type == "create_event":
             attendees = params.get("attendees")

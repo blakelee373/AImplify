@@ -298,6 +298,8 @@ function formatParamValue(key: string, value: unknown): string {
 /** Human-friendly labels for action parameter keys */
 const PARAM_LABELS: Record<string, string> = {
   recipient: "To",
+  cc: "CC",
+  bcc: "BCC",
   subject: "Subject",
   body: "Message",
   summary: "Event",
