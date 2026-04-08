@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
+import { timeAgo } from "@/lib/workflow-utils";
+import { WorkflowStatusBadge } from "@/components/WorkflowStatusBadge";
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
@@ -90,17 +93,6 @@ function toLocalDatetimeValue(d: Date): string {
 
 function localToISO(local: string): string {
   return new Date(local).toISOString();
-}
-
-function timeAgo(iso: string): string {
-  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
 
 const ACTION_ICONS: Record<string, string> = {
@@ -345,9 +337,14 @@ export default function DashboardPage() {
               Run a saved workflow with context — the AI fills in the details.
             </p>
           </div>
-          <button onClick={fetchWorkflows} disabled={loadingWorkflows} className="text-sm text-primary hover:text-primary-hover font-medium">
-            {loadingWorkflows ? "Loading..." : "Refresh"}
-          </button>
+          <div className="flex items-center gap-4">
+            <Link href="/dashboard/workflows" className="text-sm text-primary hover:text-primary-hover font-medium">
+              View all &rarr;
+            </Link>
+            <button onClick={fetchWorkflows} disabled={loadingWorkflows} className="text-sm text-primary hover:text-primary-hover font-medium">
+              {loadingWorkflows ? "Loading..." : "Refresh"}
+            </button>
+          </div>
         </div>
 
         {workflows.length === 0 && !loadingWorkflows && (
@@ -366,9 +363,7 @@ export default function DashboardPage() {
                     <p className="text-xs text-stone-500 mt-0.5">{wf.description}</p>
                   )}
                 </div>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
-                  {wf.status}
-                </span>
+                <WorkflowStatusBadge status={wf.status} />
               </div>
 
               {/* Steps preview */}

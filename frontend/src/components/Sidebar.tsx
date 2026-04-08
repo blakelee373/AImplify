@@ -3,10 +3,18 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const navItems = [
-  { href: "/", label: "Home", icon: "🏠" },
+interface NavItem {
+  href: string;
+  label: string;
+  icon: string;
+  exact?: boolean;
+}
+
+const navItems: NavItem[] = [
+  { href: "/", label: "Home", icon: "🏠", exact: true },
   { href: "/chat", label: "Chat", icon: "💬" },
-  { href: "/dashboard", label: "Dashboard", icon: "📊" },
+  { href: "/dashboard", label: "Dashboard", icon: "📊", exact: true },
+  { href: "/dashboard/workflows", label: "Workflows", icon: "⚡" },
   { href: "/settings/integrations", label: "Settings", icon: "⚙️" },
 ];
 
@@ -24,10 +32,9 @@ export function Sidebar() {
 
       <nav className="flex-1 px-3 py-4 space-y-1">
         {navItems.map((item) => {
-          const isActive =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
+          const isActive = item.exact
+            ? pathname === item.href
+            : pathname.startsWith(item.href);
           return (
             <Link
               key={item.href}
