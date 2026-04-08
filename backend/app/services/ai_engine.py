@@ -624,16 +624,30 @@ def _build_connection_status(connected_providers: Optional[List[str]] = None) ->
         )
     if disconnected:
         disc_names = [PROVIDER_DISPLAY[p]["name"] for p in sorted(disconnected)]
+        disc_providers = [p for p in sorted(disconnected)]
+        tool_examples = []
+        for p in disc_providers:
+            if p == "gmail":
+                tool_examples.append("sending emails requires Gmail")
+            elif p == "google_calendar":
+                tool_examples.append("calendar actions require Google Calendar")
         parts.append(
-            f"You are NOT connected to: {', '.join(disc_names)}. "
-            "If the owner asks to do something that needs a disconnected tool, "
-            "suggest connecting it first using the <connect_tool> tag."
+            f"CRITICAL: You are NOT connected to: {', '.join(disc_names)}. "
+            f"({', '.join(tool_examples)}). "
+            "You CANNOT use disconnected tools. Do NOT attempt any action that requires a "
+            "disconnected tool — do NOT start gathering fields (like asking for a subject line, "
+            "recipient, event time, etc.) for an action that needs a disconnected tool. "
+            "Instead, IMMEDIATELY suggest connecting it and include the <connect_tool> tag. "
+            "For example, if Gmail is not connected and the user says 'send an email to X', "
+            "respond with: 'To send that email, we'll need to connect your Gmail first. "
+            "Click below to get that set up!' and include <connect_tool>gmail</connect_tool>."
         )
     elif not connected_set:
         parts.append(
-            "You are NOT connected to any tools yet. When the owner asks to do something "
-            "that needs a tool (like sending email or checking their calendar), "
-            "suggest connecting it first using the <connect_tool> tag."
+            "CRITICAL: You are NOT connected to any tools yet. You CANNOT send emails, "
+            "create events, or do anything that requires Gmail or Google Calendar. "
+            "Do NOT start gathering fields for any action. Instead, IMMEDIATELY suggest "
+            "connecting the needed tool and include the <connect_tool> tag."
         )
 
     return "\n".join(parts)

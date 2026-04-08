@@ -164,6 +164,24 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         "list_events": "google_calendar",
     }
 
+    # Safety net: if the AI is gathering fields for a disconnected tool
+    # (asking for subject, time, etc. without emitting a connect_tool tag),
+    # intercept and show a connect card instead.
+    if not action_request_type and not signals.get("connect_tool") and not metadata:
+        gathering_action = _detect_action_gathering(clean_content)
+        if gathering_action:
+            required_provider = ACTION_PROVIDER.get(gathering_action)
+            if required_provider and required_provider not in connected_providers:
+                provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
+                clean_content = (
+                    f"To do that, we'll need to connect your {provider_name} first. "
+                    "Click below to get that set up — it only takes a moment!"
+                )
+                metadata = {
+                    "message_type": "connect_tool",
+                    "provider": required_provider,
+                }
+
     if action_request_type:
         # Check if the required tool is connected before proceeding
         required_provider = ACTION_PROVIDER.get(action_request_type)
@@ -364,6 +382,29 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
 
 import re as _re
+
+
+def _detect_action_gathering(content: str) -> Optional[str]:
+    """Detect if the AI is gathering fields for an action (pre-confirmation stage).
+
+    Catches cases like 'What should the subject line be?' or 'When should the event be?'
+    when the AI is proceeding with an action instead of suggesting a tool connection.
+    """
+    lower = content.lower()
+    # Must contain a question — the AI is asking for a missing field
+    if "?" not in lower:
+        return None
+    # Email field gathering: mentions email/send AND asks about parameters
+    email_signals = ["subject", "body", "email say", "email should", "send that email",
+                     "send an email", "send the email", "draft", "write the email"]
+    if any(s in lower for s in email_signals):
+        return "send_email"
+    # Calendar field gathering: mentions event/meeting AND asks about parameters
+    cal_signals = ["event", "meeting", "appointment", "schedule", "put on your calendar",
+                   "add to your calendar", "block off", "what time", "how long should"]
+    if any(s in lower for s in cal_signals):
+        return "create_event"
+    return None
 
 
 def _detect_action_from_content(content: str) -> Optional[str]:
