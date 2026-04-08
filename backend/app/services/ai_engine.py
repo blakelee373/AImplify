@@ -26,6 +26,7 @@ treat it as an immediate action. Recognize requests like:
 - "Create a calendar event for Friday at 2pm" → create_event
 - "Check my availability tomorrow morning" → check_availability
 - "What's on my calendar this week?" → list_events
+- "Add Jane to that event" or "Send an invite for that meeting to jane@example.com" → update_event
 
 When you recognize an immediate action request:
 1. FIRST check if you have ALL the details needed to execute. If anything is missing, \
@@ -43,7 +44,9 @@ For example: "I'll create a 'Team Standup' event for tomorrow (April 9) from 2:0
 2:30 PM — sound good?"
 3. At the very end of your message (after everything else), append this hidden tag on its own line:
 <action_request>ACTION_TYPE</action_request>
-Replace ACTION_TYPE with one of: send_email, create_event, check_availability, list_events
+Replace ACTION_TYPE with one of: send_email, create_event, update_event, check_availability, list_events
+Use update_event (not create_event) when the user wants to modify an event that was just created \
+in this conversation — like adding attendees, changing the title, or sending invites for it.
 
 When the user confirms the action ("yes," "go ahead," "do it," "sounds good"):
 1. Respond with something short like "On it — let me take care of that!"
@@ -250,6 +253,22 @@ ACTION_EXTRACTION_TOOLS = {
                 },
             },
             "required": ["summary", "start_time", "end_time"],
+        },
+    },
+    "update_event": {
+        "name": "prepare_event_update",
+        "description": "Extract parameters for updating an existing calendar event.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "add_attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses to add to the event",
+                },
+                "summary": {"type": "string", "description": "New event title (only if changing)"},
+            },
+            "required": [],
         },
     },
     "check_availability": {

@@ -112,6 +112,7 @@ export function MessageBubble({ role, content, metadata }: MessageBubbleProps) {
 const ACTION_LABELS: Record<string, { icon: string; label: string }> = {
   send_email: { icon: "✉️", label: "Send Email" },
   create_event: { icon: "📅", label: "Create Event" },
+  update_event: { icon: "📝", label: "Update Event" },
   check_availability: { icon: "🔍", label: "Check Availability" },
   list_events: { icon: "📋", label: "List Events" },
 };
