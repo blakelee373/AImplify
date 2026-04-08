@@ -483,6 +483,21 @@ def _execute_workflow_manage(db: Session, action: str, workflow_id: int) -> dict
     return {"success": True, "workflow_name": workflow_name, "detail": f"'{workflow_name}' has been {verb}."}
 
 
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: int, db: Session = Depends(get_db)):
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    # Detach any workflows that were created from this conversation
+    db.query(Workflow).filter(Workflow.conversation_id == conversation_id).update(
+        {"conversation_id": None}
+    )
+    db.query(Message).filter(Message.conversation_id == conversation_id).delete()
+    db.delete(conversation)
+    db.commit()
+    return {"status": "deleted", "id": conversation_id}
+
+
 @router.get("/conversations", response_model=List[ConversationSummary])
 async def list_conversations(db: Session = Depends(get_db)):
     conversations = db.query(Conversation).order_by(Conversation.updated_at.desc()).all()
