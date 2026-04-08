@@ -13,6 +13,7 @@ from app.schemas.chat import (
     MessageResponse,
 )
 from app.models.activity_log import ActivityLog
+from app.models.integration import Integration
 from app.models.workflow import Workflow
 from app.services.ai_engine import (
     get_ai_response,
@@ -99,13 +100,39 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 content += f"\n\n[System: A confirmation card for '{action_type}' is being shown to the user. " \
                            "When they confirm, respond with a short acknowledgment and use <action_confirmed> — " \
                            "do NOT re-summarize or show another <action_request>.]"
+            elif msg_type == "connect_tool":
+                provider = m.metadata_json.get("provider", "")
+                content += f"\n\n[System: A 'Connect' button for '{provider}' is being shown to the user. " \
+                           "Wait for them to complete the connection.]"
+            elif msg_type == "disconnect_request":
+                provider = m.metadata_json.get("provider", "")
+                content += f"\n\n[System: A disconnect confirmation for '{provider}' is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <disconnect_confirmed> — " \
+                           "do NOT re-summarize or show another <disconnect_tool>.]"
+            elif msg_type == "disconnect_result":
+                provider = m.metadata_json.get("provider", "")
+                success = m.metadata_json.get("success", False)
+                if success:
+                    content += f"\n\n[System: {provider} has been disconnected successfully.]"
+                else:
+                    content += f"\n\n[System: Failed to disconnect {provider}.]"
         messages.append({"role": m.role, "content": content})
 
     # Get AI response and parse for signal tags
     tz = request.timezone or "UTC"
     all_workflows = db.query(Workflow).all()
     wf_names = [w.name for w in all_workflows] if all_workflows else None
-    raw_content = await get_ai_response(messages, timezone=tz, workflow_names=wf_names)
+
+    # Query integration connection status for dynamic prompt
+    connected_integrations = db.query(Integration).filter(
+        Integration.status == "connected"
+    ).all()
+    connected_providers = [i.provider for i in connected_integrations]
+
+    raw_content = await get_ai_response(
+        messages, timezone=tz, workflow_names=wf_names,
+        connected_providers=connected_providers,
+    )
     signals = parse_ai_response(raw_content)
     clean_content = signals["clean_content"]
 
@@ -225,6 +252,57 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "success": False,
                 "workflow_name": manage["workflow_name"],
                 "detail": "Could not find that workflow.",
+            }
+
+    # ── Tool connections (connect / disconnect) ────────────────────────
+    if signals["connect_tool"]:
+        provider = signals["connect_tool"]
+        valid_providers = {"gmail", "google_calendar"}
+        if provider in valid_providers:
+            already = provider in connected_providers
+            if already:
+                # AI shouldn't emit this, but handle gracefully
+                metadata = {
+                    "message_type": "connect_already",
+                    "provider": provider,
+                }
+            else:
+                metadata = {
+                    "message_type": "connect_tool",
+                    "provider": provider,
+                }
+
+    if signals["disconnect_tool"]:
+        provider = signals["disconnect_tool"]
+        metadata = {
+            "message_type": "disconnect_request",
+            "provider": provider,
+        }
+
+    if signals["disconnect_confirmed"]:
+        provider = signals["disconnect_confirmed"]
+        try:
+            from app.routers.integrations import _disconnect
+            _disconnect(provider, db)
+            metadata = {
+                "message_type": "disconnect_result",
+                "provider": provider,
+                "success": True,
+            }
+            # Log the disconnection
+            provider_name = "Gmail" if provider == "gmail" else "Google Calendar"
+            log = ActivityLog(
+                action_type="tool_disconnected",
+                description=f"{provider_name} disconnected via chat",
+                details={"provider": provider, "source": "chat"},
+            )
+            db.add(log)
+        except Exception as e:
+            metadata = {
+                "message_type": "disconnect_result",
+                "provider": provider,
+                "success": False,
+                "error": str(e),
             }
 
     # Save assistant message

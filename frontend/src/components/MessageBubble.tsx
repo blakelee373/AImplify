@@ -23,15 +23,18 @@ interface MessageMetadata {
   workflow_status?: string;
   detail?: string;
   query?: string;
+  provider?: string;
+  error?: string;
 }
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   metadata?: MessageMetadata | null;
+  onConnectTool?: (provider: string) => void;
 }
 
-export function MessageBubble({ role, content, metadata }: MessageBubbleProps) {
+export function MessageBubble({ role, content, metadata, onConnectTool }: MessageBubbleProps) {
   const isUser = role === "user";
 
   // Workflow confirmed — show success banner
@@ -108,6 +111,92 @@ export function MessageBubble({ role, content, metadata }: MessageBubbleProps) {
     );
   }
 
+  // Connect tool — show connect button card
+  if (metadata?.message_type === "connect_tool" && metadata.provider) {
+    const info = PROVIDER_DISPLAY[metadata.provider] || { icon: "\u{1F517}", name: metadata.provider };
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className="bg-blue-50 border-2 border-blue-300 rounded-xl overflow-hidden">
+            <div className="bg-blue-100 px-4 py-2.5 flex items-center gap-2">
+              <span className="text-base">{info.icon}</span>
+              <span className="text-sm font-semibold text-blue-900">Connect {info.name}</span>
+            </div>
+            <div className="px-4 py-3">
+              <button
+                onClick={() => onConnectTool?.(metadata.provider!)}
+                className="px-4 py-2 text-sm rounded-lg bg-primary text-white font-semibold hover:bg-primary-hover transition-colors"
+              >
+                Connect {info.name}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Already connected — info banner
+  if (metadata?.message_type === "connect_already" && metadata.provider) {
+    const info = PROVIDER_DISPLAY[metadata.provider] || { icon: "\u{1F517}", name: metadata.provider };
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium">
+            {info.icon} {info.name} is already connected
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Disconnect request — confirmation card
+  if (metadata?.message_type === "disconnect_request" && metadata.provider) {
+    const info = PROVIDER_DISPLAY[metadata.provider] || { icon: "\u{1F517}", name: metadata.provider };
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700 font-medium">
+            {"\u26A0\uFE0F"} Disconnect {info.name}
+            <div className="mt-1 text-xs font-normal">Reply &ldquo;yes&rdquo; to confirm or &ldquo;no&rdquo; to cancel</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Disconnect result — success/error banner
+  if (metadata?.message_type === "disconnect_result") {
+    const info = PROVIDER_DISPLAY[metadata.provider || ""] || { icon: "\u{1F517}", name: metadata.provider };
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          {metadata.success ? (
+            <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium">
+              {info.name} disconnected
+            </div>
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 font-medium">
+              Failed to disconnect {info.name}: {metadata.error || "Unknown error"}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // Action request — show confirmation card with details
   if (metadata?.message_type === "action_request" && metadata.action_params) {
     return (
@@ -169,6 +258,13 @@ export function MessageBubble({ role, content, metadata }: MessageBubbleProps) {
     </div>
   );
 }
+
+/* ── Provider display info ─────────────────────────────────────────────────── */
+
+const PROVIDER_DISPLAY: Record<string, { icon: string; name: string }> = {
+  gmail: { icon: "\u2709", name: "Gmail" },
+  google_calendar: { icon: "\uD83D\uDCC5", name: "Google Calendar" },
+};
 
 /* ── Action sub-components ──────────────────────────────────────────────────── */
 

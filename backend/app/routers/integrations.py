@@ -3,9 +3,11 @@ import os
 from pathlib import Path
 from typing import List
 
+import html as html_mod
+
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from sqlalchemy.orm import Session
 
@@ -54,21 +56,27 @@ GOOGLE_CLIENT_CONFIG = {
 _VERIFIER_FILE = Path(__file__).resolve().parent.parent.parent / ".oauth_verifiers.json"
 
 
-def _save_verifier(provider: str, verifier: str):
+def _save_verifier(provider: str, verifier: str, mode: str = "redirect"):
     data = {}
     if _VERIFIER_FILE.exists():
         data = json.loads(_VERIFIER_FILE.read_text())
-    data[provider] = verifier
+    data[provider] = {"verifier": verifier, "mode": mode}
     _VERIFIER_FILE.write_text(json.dumps(data))
 
 
 def _pop_verifier(provider: str):
+    """Returns (verifier, mode) tuple."""
     if not _VERIFIER_FILE.exists():
-        return None
+        return None, "redirect"
     data = json.loads(_VERIFIER_FILE.read_text())
-    verifier = data.pop(provider, None)
+    entry = data.pop(provider, None)
     _VERIFIER_FILE.write_text(json.dumps(data))
-    return verifier
+    if entry is None:
+        return None, "redirect"
+    # Backward-compatible with old plain-string format
+    if isinstance(entry, str):
+        return entry, "redirect"
+    return entry.get("verifier"), entry.get("mode", "redirect")
 
 
 def _make_flow(provider: str) -> Flow:
@@ -86,16 +94,60 @@ def _connect(provider: str):
         include_granted_scopes="true",
         prompt="consent",
     )
-    _save_verifier(provider, flow.code_verifier)
+    _save_verifier(provider, flow.code_verifier, mode="redirect")
     return RedirectResponse(url=authorization_url)
 
 
+def _connect_url(provider: str):
+    """Generate OAuth URL and return it as JSON (for popup mode)."""
+    flow = _make_flow(provider)
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    _save_verifier(provider, flow.code_verifier, mode="popup")
+    return {"authorization_url": authorization_url}
+
+
+def _popup_success_html(provider: str) -> str:
+    payload = json.dumps({"type": "oauth_success", "provider": provider})
+    target = json.dumps(FRONTEND_URL)
+    return (
+        "<!DOCTYPE html><html><body>"
+        '<p style="font-family:sans-serif;text-align:center;margin-top:40px">'
+        "Connected! This window will close automatically.</p>"
+        "<script>"
+        f"window.opener.postMessage({payload},{target});"
+        "window.close();"
+        "</script></body></html>"
+    )
+
+
+def _popup_error_html(provider: str, error: str) -> str:
+    safe_error = html_mod.escape(error)
+    payload = json.dumps({"type": "oauth_error", "provider": provider, "error": error})
+    target = json.dumps(FRONTEND_URL)
+    return (
+        "<!DOCTYPE html><html><body>"
+        '<p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#c00">'
+        "Connection failed: " + safe_error + "</p>"
+        "<script>"
+        f"window.opener.postMessage({payload},{target});"
+        "setTimeout(function(){window.close()},3000);"
+        "</script></body></html>"
+    )
+
+
 def _callback(provider: str, code: str, db: Session):
+    verifier, mode = _pop_verifier(provider)
     try:
         flow = _make_flow(provider)
-        flow.code_verifier = _pop_verifier(provider)
+        flow.code_verifier = verifier
         flow.fetch_token(code=code)
     except Exception as e:
+        if mode == "popup":
+            return HTMLResponse(_popup_error_html(provider, str(e)))
         raise HTTPException(status_code=400, detail=f"OAuth token exchange failed: {e}")
 
     credentials = flow.credentials
@@ -125,6 +177,9 @@ def _callback(provider: str, code: str, db: Session):
         db.add(integration)
 
     db.commit()
+
+    if mode == "popup":
+        return HTMLResponse(_popup_success_html(provider))
     return RedirectResponse(url=f"{FRONTEND_URL}/settings/integrations?status=success")
 
 
@@ -175,6 +230,12 @@ async def gmail_disconnect(db: Session = Depends(get_db)):
     return _disconnect("gmail", db)
 
 
+@router.get("/integrations/gmail/connect-url")
+async def gmail_connect_url():
+    """Return the Gmail OAuth URL as JSON for popup-based connection."""
+    return _connect_url("gmail")
+
+
 # ── Google Calendar endpoints ────────────────────────────────────────────────
 
 
@@ -194,6 +255,12 @@ async def calendar_callback(code: str, db: Session = Depends(get_db)):
 async def calendar_disconnect(db: Session = Depends(get_db)):
     """Revoke Calendar token and mark as disconnected."""
     return _disconnect("google_calendar", db)
+
+
+@router.get("/integrations/google_calendar/connect-url")
+async def calendar_connect_url():
+    """Return the Calendar OAuth URL as JSON for popup-based connection."""
+    return _connect_url("google_calendar")
 
 
 # ── Status ───────────────────────────────────────────────────────────────────
