@@ -56,7 +56,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     messages = [{"role": m.role, "content": m.content} for m in history]
 
     # Get AI response and parse for signal tags
-    raw_content = await get_ai_response(messages)
+    tz = request.timezone or "UTC"
+    raw_content = await get_ai_response(messages, timezone=tz)
     signals = parse_ai_response(raw_content)
     clean_content = signals["clean_content"]
 
@@ -79,13 +80,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if signals["action_request"]:
         # Extract structured action parameters via a second Claude call
         action_type = signals["action_request"]
-        params = await extract_action_from_conversation(messages, action_type)
-        if params:
-            metadata = {
-                "message_type": "action_request",
-                "action_type": action_type,
-                "action_params": params,
-            }
+        params = await extract_action_from_conversation(messages, action_type, timezone=tz)
+        metadata = {
+            "message_type": "action_request",
+            "action_type": action_type,
+            "action_params": params or {},
+        }
 
     if signals["action_confirmed"]:
         # Find the most recent action request and execute it

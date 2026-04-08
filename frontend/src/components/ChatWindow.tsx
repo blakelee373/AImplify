@@ -61,6 +61,7 @@ export function ChatWindow() {
       const data = await api.post<ChatResponse>("/api/chat", {
         message: text,
         conversation_id: conversationId,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
 
       setConversationId(data.conversation_id);

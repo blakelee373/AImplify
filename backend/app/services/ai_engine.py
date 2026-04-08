@@ -268,24 +268,25 @@ output the result. Be precise — use the details the user provided.
 
 IMPORTANT: For dates and times, convert relative references (like "tomorrow", \
 "next Friday", "this afternoon") into full ISO 8601 timestamps using today's date \
-as reference. Today is {today}. Use the user's local timezone offset if mentioned, \
-otherwise use UTC. If a duration is given instead of an end time, calculate the end \
-time from the start time plus the duration.\
+as reference. Today is {today}. The user's timezone is {timezone}. Always use this \
+timezone for the timestamps (e.g., if timezone is America/Chicago, use offset -05:00 \
+or -06:00 depending on DST). If a duration is given instead of an end time, calculate \
+the end time from the start time plus the duration.\
 """
 
 
 async def extract_action_from_conversation(
-    messages: List[Dict[str, str]], action_type: str
+    messages: List[Dict[str, str]], action_type: str, timezone: str = "UTC"
 ) -> Optional[dict]:
     """Extract structured action parameters from the conversation using tool_use."""
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone as tz
 
     tool = ACTION_EXTRACTION_TOOLS.get(action_type)
     if not tool:
         return None
 
-    today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
-    system_prompt = ACTION_EXTRACTION_PROMPT.format(today=today)
+    today = datetime.now(tz.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+    system_prompt = ACTION_EXTRACTION_PROMPT.format(today=today, timezone=timezone)
 
     try:
         response = await client.messages.create(
@@ -306,12 +307,12 @@ async def extract_action_from_conversation(
         return None
 
 
-async def get_ai_response(messages: List[Dict[str, str]]) -> str:
+async def get_ai_response(messages: List[Dict[str, str]], timezone: str = "UTC") -> str:
     """Send messages to Claude and return the assistant's response."""
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone as tz
 
-    today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
-    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}."
+    today = datetime.now(tz.utc).strftime("%A, %B %d, %Y")
+    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}. The user's timezone is {timezone}."
 
     response = await client.messages.create(
         model=CLAUDE_MODEL,
