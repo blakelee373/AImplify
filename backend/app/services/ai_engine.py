@@ -44,9 +44,11 @@ REQUIRED FIELDS — you MUST have ALL of these before showing a confirmation:
 - create_event: (1) event title, (2) date and time, (3) duration or end time
 - update_event: (1) which event (from this conversation), (2) what to change (attendees to add, new title, etc.)
 - check_availability: (1) specific start time, (2) specific end time (not a whole day — a specific window like 2pm-3pm)
-- list_events: no required fields — can execute immediately
+- list_events: no required fields — SKIP confirmation entirely. Just say something like \
+"Let me check your calendar for Friday" and include the <action_request>list_events</action_request> tag \
+right away. Do NOT ask "sound good?" for listing events — just do it.
 
-GATHERING FLOW — follow this strictly:
+GATHERING FLOW — follow this strictly (except list_events, which skips confirmation as noted above):
 1. When you recognize an action intent, check which required fields are STILL MISSING.
 2. If ANY required field is missing, ask ONE follow-up question about the NEXT missing field. \
 Do NOT include any hidden tags. Do NOT summarize or confirm yet. Just ask about the one missing piece. \

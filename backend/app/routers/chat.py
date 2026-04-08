@@ -87,11 +87,23 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if action_request_type:
         # Extract structured action parameters via a second Claude call
         params = await extract_action_from_conversation(messages, action_request_type, timezone=tz)
-        metadata = {
-            "message_type": "action_request",
-            "action_type": action_request_type,
-            "action_params": params or {},
-        }
+
+        # Read-only actions (list_events) execute immediately — no confirmation needed
+        if action_request_type == "list_events":
+            exec_meta = {"action_type": action_request_type, "action_params": params or {}}
+            result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
+            metadata = {
+                "message_type": "action_result",
+                "action_type": action_request_type,
+                "success": result["status"] == "success",
+                "details": result.get("details", {}),
+            }
+        else:
+            metadata = {
+                "message_type": "action_request",
+                "action_type": action_request_type,
+                "action_params": params or {},
+            }
 
     if signals["action_confirmed"]:
         # Determine action type: from the confirmed tag, from a prior action_request, or None
