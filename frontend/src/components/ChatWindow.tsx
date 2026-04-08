@@ -18,6 +18,10 @@ interface MessageMetadata {
     }>;
   };
   workflow_id?: number;
+  action_type?: string;
+  action_params?: Record<string, unknown>;
+  success?: boolean;
+  details?: Record<string, unknown>;
 }
 
 interface Message {
@@ -57,6 +61,7 @@ export function ChatWindow() {
       const data = await api.post<ChatResponse>("/api/chat", {
         message: text,
         conversation_id: conversationId,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
 
       setConversationId(data.conversation_id);

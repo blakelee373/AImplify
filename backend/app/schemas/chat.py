@@ -6,6 +6,7 @@ from pydantic import BaseModel, model_validator
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[int] = None
+    timezone: Optional[str] = None
 
 
 class MessageResponse(BaseModel):

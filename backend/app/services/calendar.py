@@ -42,7 +42,67 @@ def create_event(
     if attendees:
         event_body["attendees"] = [{"email": e} for e in attendees]
 
-    event = service.events().insert(calendarId="primary", body=event_body).execute()
+    send_updates = "all" if attendees else "none"
+    event = service.events().insert(
+        calendarId="primary", body=event_body, sendUpdates=send_updates
+    ).execute()
+
+    return {
+        "event_id": event["id"],
+        "link": event.get("htmlLink"),
+        "summary": event.get("summary"),
+        "start": event["start"].get("dateTime"),
+        "end": event["end"].get("dateTime"),
+    }
+
+
+def update_event(
+    db: Session,
+    event_id: str,
+    summary: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    description: Optional[str] = None,
+    attendees: Optional[List[str]] = None,
+    add_attendees: Optional[List[str]] = None,
+) -> dict:
+    """Update an existing Google Calendar event.
+
+    If add_attendees is provided, merges them with existing attendees.
+    If attendees is provided, replaces all attendees.
+    """
+    service = _get_calendar_service(db)
+
+    # Fetch existing event
+    existing = service.events().get(calendarId="primary", eventId=event_id).execute()
+
+    patch_body = {}
+    if summary:
+        patch_body["summary"] = summary
+    if start_time:
+        patch_body["start"] = {"dateTime": start_time}
+    if end_time:
+        patch_body["end"] = {"dateTime": end_time}
+    if description is not None:
+        patch_body["description"] = description
+
+    if add_attendees:
+        current = existing.get("attendees", [])
+        current_emails = {a["email"] for a in current}
+        for email in add_attendees:
+            if email not in current_emails:
+                current.append({"email": email})
+        patch_body["attendees"] = current
+    elif attendees is not None:
+        patch_body["attendees"] = [{"email": e} for e in attendees]
+
+    has_attendees = "attendees" in patch_body
+    send_updates = "all" if has_attendees else "none"
+
+    event = service.events().patch(
+        calendarId="primary", eventId=event_id, body=patch_body,
+        sendUpdates=send_updates,
+    ).execute()
 
     return {
         "event_id": event["id"],

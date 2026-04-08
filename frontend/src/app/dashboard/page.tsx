@@ -141,6 +141,9 @@ export default function DashboardPage() {
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [loadingWorkflows, setLoadingWorkflows] = useState(false);
   const [runningId, setRunningId] = useState<number | null>(null);
+  const [togglingId, setTogglingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [contextInputs, setContextInputs] = useState<Record<number, Record<string, string>>>({});
   const [execResults, setExecResults] = useState<Record<number, ExecuteResult | null>>({});
   const [execErrors, setExecErrors] = useState<Record<number, string | null>>({});
@@ -233,6 +236,38 @@ export default function DashboardPage() {
       }));
     } finally {
       setRunningId(null);
+    }
+  }
+
+  async function handleToggleStatus(wf: WorkflowItem) {
+    const newStatus = wf.status === "paused" ? "active" : wf.status === "active" ? "paused" : "active";
+    setTogglingId(wf.id);
+    try {
+      const updated = await api.patch<WorkflowItem>(`/api/workflows/${wf.id}/status`, { status: newStatus });
+      setWorkflows((prev) => prev.map((w) => (w.id === wf.id ? updated : w)));
+    } catch (err) {
+      setExecErrors((prev) => ({
+        ...prev,
+        [wf.id]: err instanceof Error ? err.message : "Failed to update status",
+      }));
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  async function handleDeleteWorkflow(workflowId: number) {
+    setDeletingId(workflowId);
+    try {
+      await api.delete(`/api/workflows/${workflowId}`);
+      setWorkflows((prev) => prev.filter((w) => w.id !== workflowId));
+      setConfirmDeleteId(null);
+    } catch (err) {
+      setExecErrors((prev) => ({
+        ...prev,
+        [workflowId]: err instanceof Error ? err.message : "Failed to delete workflow",
+      }));
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -354,90 +389,135 @@ export default function DashboardPage() {
         )}
 
         <div className="mt-4 space-y-6">
-          {workflows.map((wf) => (
-            <div key={wf.id} className="rounded-lg border border-stone-200 p-4">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-stone-900">{wf.name}</h3>
-                  {wf.description && (
-                    <p className="text-xs text-stone-500 mt-0.5">{wf.description}</p>
-                  )}
-                </div>
-                <WorkflowStatusBadge status={wf.status} />
-              </div>
+          {workflows.map((wf) => {
+            const isPaused = wf.status === "paused";
 
-              {/* Steps preview */}
-              <div className="mt-3 space-y-1">
-                {wf.steps.map((step) => (
-                  <div key={step.id} className="flex items-center gap-2 text-xs text-stone-600">
-                    <span className="w-5 h-5 rounded-full bg-stone-100 flex items-center justify-center text-[10px] font-medium">
-                      {step.step_order}
-                    </span>
-                    <span>{step.description || step.action_type}</span>
+            return (
+              <div key={wf.id} className={`rounded-lg border p-4 ${isPaused ? "border-amber-200 bg-amber-50/30" : "border-stone-200"}`}>
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-stone-900">{wf.name}</h3>
+                    {wf.description && (
+                      <p className="text-xs text-stone-500 mt-0.5">{wf.description}</p>
+                    )}
                   </div>
-                ))}
-              </div>
-
-              {/* Context inputs */}
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-stone-600">Client name</label>
-                  <input
-                    type="text"
-                    placeholder="Jane Smith"
-                    value={contextInputs[wf.id]?.client_name || ""}
-                    onChange={(e) => setCtxField(wf.id, "client_name", e.target.value)}
-                    className={inputClass}
-                  />
+                  <WorkflowStatusBadge status={wf.status} />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600">Client email</label>
-                  <input
-                    type="email"
-                    placeholder="jane@example.com"
-                    value={contextInputs[wf.id]?.client_email || ""}
-                    onChange={(e) => setCtxField(wf.id, "client_email", e.target.value)}
-                    className={inputClass}
-                  />
-                </div>
-              </div>
 
-              {/* Run button */}
-              <button
-                onClick={() => handleRunWorkflow(wf.id)}
-                disabled={runningId === wf.id}
-                className={`mt-3 ${btnClass}`}
-              >
-                {runningId === wf.id ? "Running..." : "Run Workflow"}
-              </button>
-
-              {/* Execution results */}
-              {execErrors[wf.id] && (
-                <div className="mt-3 rounded-lg bg-red-50 text-red-800 border border-red-200 px-4 py-3 text-sm">
-                  {execErrors[wf.id]}
-                </div>
-              )}
-              {execResults[wf.id] && (
-                <div className="mt-3 space-y-2">
-                  <div className={`rounded-lg px-4 py-3 text-sm ${
-                    execResults[wf.id]!.status === "completed"
-                      ? "bg-green-50 text-green-800 border border-green-200"
-                      : "bg-amber-50 text-amber-800 border border-amber-200"
-                  }`}>
-                    {execResults[wf.id]!.status === "completed"
-                      ? `All ${execResults[wf.id]!.steps_executed} steps completed successfully`
-                      : `Completed with errors (${execResults[wf.id]!.steps_executed} steps run)`}
-                  </div>
-                  {execResults[wf.id]!.results.map((r) => (
-                    <div key={r.step_order} className="flex items-center gap-2 text-xs text-stone-600">
-                      <span className={`w-2 h-2 rounded-full ${r.status === "success" ? "bg-green-500" : "bg-red-500"}`} />
-                      Step {r.step_order}: {r.description || r.action_type} — {r.status}
+                {/* Steps preview */}
+                <div className="mt-3 space-y-1">
+                  {wf.steps.map((step) => (
+                    <div key={step.id} className="flex items-center gap-2 text-xs text-stone-600">
+                      <span className="w-5 h-5 rounded-full bg-stone-100 flex items-center justify-center text-[10px] font-medium">
+                        {step.step_order}
+                      </span>
+                      <span>{step.description || step.action_type}</span>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
-          ))}
+
+                {/* Context inputs */}
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600">Client name</label>
+                    <input
+                      type="text"
+                      placeholder="Jane Smith"
+                      value={contextInputs[wf.id]?.client_name || ""}
+                      onChange={(e) => setCtxField(wf.id, "client_name", e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600">Client email</label>
+                    <input
+                      type="email"
+                      placeholder="jane@example.com"
+                      value={contextInputs[wf.id]?.client_email || ""}
+                      onChange={(e) => setCtxField(wf.id, "client_email", e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
+                </div>
+
+                {/* Control buttons */}
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    onClick={() => handleRunWorkflow(wf.id)}
+                    disabled={runningId === wf.id || isPaused}
+                    className={btnClass}
+                    title={isPaused ? "Resume this workflow before running" : undefined}
+                  >
+                    {runningId === wf.id ? "Running..." : "Run Workflow"}
+                  </button>
+
+                  <button
+                    onClick={() => handleToggleStatus(wf)}
+                    disabled={togglingId === wf.id}
+                    className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 ${
+                      isPaused
+                        ? "bg-green-100 text-green-700 hover:bg-green-200"
+                        : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                    }`}
+                  >
+                    {togglingId === wf.id ? "..." : isPaused ? "Resume" : wf.status === "active" ? "Pause" : "Activate"}
+                  </button>
+
+                  {confirmDeleteId === wf.id ? (
+                    <div className="flex items-center gap-2 ml-auto">
+                      <span className="text-xs text-red-600 font-medium">Delete &ldquo;{wf.name}&rdquo;?</span>
+                      <button
+                        onClick={() => handleDeleteWorkflow(wf.id)}
+                        disabled={deletingId === wf.id}
+                        className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors disabled:opacity-50"
+                      >
+                        {deletingId === wf.id ? "Deleting..." : "Yes, delete"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="px-3 py-1.5 rounded-lg bg-stone-100 text-stone-600 text-xs font-semibold hover:bg-stone-200 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmDeleteId(wf.id)}
+                      className="ml-auto px-4 py-2.5 rounded-lg bg-red-50 text-red-600 text-sm font-semibold hover:bg-red-100 transition-colors"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+
+                {/* Execution results */}
+                {execErrors[wf.id] && (
+                  <div className="mt-3 rounded-lg bg-red-50 text-red-800 border border-red-200 px-4 py-3 text-sm">
+                    {execErrors[wf.id]}
+                  </div>
+                )}
+                {execResults[wf.id] && (
+                  <div className="mt-3 space-y-2">
+                    <div className={`rounded-lg px-4 py-3 text-sm ${
+                      execResults[wf.id]!.status === "completed"
+                        ? "bg-green-50 text-green-800 border border-green-200"
+                        : "bg-amber-50 text-amber-800 border border-amber-200"
+                    }`}>
+                      {execResults[wf.id]!.status === "completed"
+                        ? `All ${execResults[wf.id]!.steps_executed} steps completed successfully`
+                        : `Completed with errors (${execResults[wf.id]!.steps_executed} steps run)`}
+                    </div>
+                    {execResults[wf.id]!.results.map((r) => (
+                      <div key={r.step_order} className="flex items-center gap-2 text-xs text-stone-600">
+                        <span className={`w-2 h-2 rounded-full ${r.status === "success" ? "bg-green-500" : "bg-red-500"}`} />
+                        Step {r.step_order}: {r.description || r.action_type} — {r.status}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 
