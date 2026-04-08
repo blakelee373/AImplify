@@ -51,7 +51,8 @@ in this conversation — like adding attendees, changing the title, or sending i
 When the user confirms the action ("yes," "go ahead," "do it," "sounds good"):
 1. Respond with something short like "On it — let me take care of that!"
 2. At the very end of your message, append this hidden tag on its own line:
-<action_confirmed>true</action_confirmed>
+<action_confirmed>ACTION_TYPE</action_confirmed>
+Replace ACTION_TYPE with the same type you used in the action_request tag (e.g., send_email, create_event, etc.).
 
 If the user says "no" or wants to change something about the action, ask what to change \
 and re-present the details with the <action_request> tag again.
@@ -195,7 +196,6 @@ def parse_ai_response(raw_content: str) -> dict:
     """
     workflow_ready = "<workflow_ready>true</workflow_ready>" in raw_content
     workflow_confirmed = "<workflow_confirmed>true</workflow_confirmed>" in raw_content
-    action_confirmed = "<action_confirmed>true</action_confirmed>" in raw_content
 
     # Extract action_request type (e.g., "send_email" from <action_request>send_email</action_request>)
     action_request = None
@@ -203,10 +203,19 @@ def parse_ai_response(raw_content: str) -> dict:
     if action_match:
         action_request = action_match.group(1)
 
+    # Extract action_confirmed — supports both <action_confirmed>true</action_confirmed>
+    # and <action_confirmed>send_email</action_confirmed> (with action type)
+    action_confirmed = None
+    confirmed_match = re.search(r"<action_confirmed>(\w+)</action_confirmed>", raw_content)
+    if confirmed_match:
+        val = confirmed_match.group(1)
+        action_confirmed = val if val != "true" else True
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
-    clean = clean.replace("<action_confirmed>true</action_confirmed>", "")
+    if confirmed_match:
+        clean = clean.replace(confirmed_match.group(0), "")
     if action_match:
         clean = clean.replace(action_match.group(0), "")
     clean = clean.strip()
@@ -299,6 +308,19 @@ the end time from the start time plus the duration.\
 """
 
 
+def _get_tz_info(tz_name: str) -> str:
+    """Compute the current UTC offset for a timezone name like 'America/Chicago'."""
+    from datetime import datetime, timezone as tz
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(tz_name))
+        offset = now.strftime("%z")  # e.g., "-0500"
+        offset_formatted = offset[:3] + ":" + offset[3:]  # e.g., "-05:00"
+        return f"{tz_name} (currently UTC{offset_formatted})"
+    except Exception:
+        return tz_name
+
+
 async def extract_action_from_conversation(
     messages: List[Dict[str, str]], action_type: str, timezone: str = "UTC"
 ) -> Optional[dict]:
@@ -310,7 +332,8 @@ async def extract_action_from_conversation(
         return None
 
     today = datetime.now(tz.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
-    system_prompt = ACTION_EXTRACTION_PROMPT.format(today=today, timezone=timezone)
+    tz_info = _get_tz_info(timezone)
+    system_prompt = ACTION_EXTRACTION_PROMPT.format(today=today, timezone=tz_info)
 
     try:
         response = await client.messages.create(
@@ -336,7 +359,8 @@ async def get_ai_response(messages: List[Dict[str, str]], timezone: str = "UTC")
     from datetime import datetime, timezone as tz
 
     today = datetime.now(tz.utc).strftime("%A, %B %d, %Y")
-    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}. The user's timezone is {timezone}."
+    tz_info = _get_tz_info(timezone)
+    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}. The user's timezone is {tz_info}."
 
     response = await client.messages.create(
         model=CLAUDE_MODEL,
