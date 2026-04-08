@@ -18,7 +18,34 @@ IMPORTANT RULES:
 - When possible, offer 2-4 simple choices instead of open-ended questions.
 - Keep responses short and conversational — 2-3 sentences max per turn.
 
-CONVERSATION FLOW:
+IMMEDIATE ACTIONS — DO SOMETHING RIGHT NOW:
+
+If the user asks you to do something right now (not set up a recurring process), \
+treat it as an immediate action. Recognize requests like:
+- "Send Jane a welcome email at jane@example.com" → send_email
+- "Create a calendar event for Friday at 2pm" → create_event
+- "Check my availability tomorrow morning" → check_availability
+- "What's on my calendar this week?" → list_events
+
+When you recognize an immediate action request:
+1. Summarize exactly what you'll do and confirm the details with the user. For example: \
+"I'll send a welcome email to jane@example.com with the subject 'Welcome!' — sound good?"
+2. At the very end of your message (after everything else), append this hidden tag on its own line:
+<action_request>ACTION_TYPE</action_request>
+Replace ACTION_TYPE with one of: send_email, create_event, check_availability, list_events
+
+When the user confirms the action ("yes," "go ahead," "do it," "sounds good"):
+1. Respond with something short like "On it — let me take care of that!"
+2. At the very end of your message, append this hidden tag on its own line:
+<action_confirmed>true</action_confirmed>
+
+If the user says "no" or wants to change something about the action, ask what to change \
+and re-present the details with the <action_request> tag again.
+
+WORKFLOW SETUP — SET UP A RECURRING PROCESS:
+
+If the user describes a task they want to happen automatically or repeatedly (not a \
+one-time action), follow the workflow discovery flow below.
 
 1. OPENING — If there is only one user message in the conversation (the first message), \
 greet them warmly and ask:
@@ -146,19 +173,115 @@ tool to output the result. Be precise and complete — capture every step the us
 """
 
 
-def parse_ai_response(raw_content: str) -> Tuple[str, bool, bool]:
+def parse_ai_response(raw_content: str) -> dict:
     """Strip hidden signal tags from AI response and return flags.
 
-    Returns (clean_content, workflow_ready, workflow_confirmed).
+    Returns dict with keys: clean_content, workflow_ready, workflow_confirmed,
+    action_request (str or None), action_confirmed.
     """
     workflow_ready = "<workflow_ready>true</workflow_ready>" in raw_content
     workflow_confirmed = "<workflow_confirmed>true</workflow_confirmed>" in raw_content
+    action_confirmed = "<action_confirmed>true</action_confirmed>" in raw_content
 
-    clean = raw_content.replace("<workflow_ready>true</workflow_ready>", "")
+    # Extract action_request type (e.g., "send_email" from <action_request>send_email</action_request>)
+    action_request = None
+    action_match = re.search(r"<action_request>(\w+)</action_request>", raw_content)
+    if action_match:
+        action_request = action_match.group(1)
+
+    clean = raw_content
+    clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
+    clean = clean.replace("<action_confirmed>true</action_confirmed>", "")
+    if action_match:
+        clean = clean.replace(action_match.group(0), "")
     clean = clean.strip()
 
-    return clean, workflow_ready, workflow_confirmed
+    return {
+        "clean_content": clean,
+        "workflow_ready": workflow_ready,
+        "workflow_confirmed": workflow_confirmed,
+        "action_request": action_request,
+        "action_confirmed": action_confirmed,
+    }
+
+
+# ── Action extraction tools ─────────────────────────────────────────────────
+
+ACTION_EXTRACTION_TOOLS = {
+    "send_email": {
+        "name": "prepare_email",
+        "description": "Extract email parameters from the conversation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "recipient": {"type": "string", "description": "Email address"},
+                "subject": {"type": "string", "description": "Email subject line"},
+                "body": {"type": "string", "description": "Email body, friendly and professional"},
+            },
+            "required": ["recipient", "subject", "body"],
+        },
+    },
+    "create_event": {
+        "name": "prepare_event",
+        "description": "Extract calendar event parameters from the conversation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string", "description": "Event title"},
+                "start_time": {"type": "string", "description": "ISO 8601 start time"},
+                "end_time": {"type": "string", "description": "ISO 8601 end time"},
+                "description": {"type": "string", "description": "Event notes (optional)"},
+            },
+            "required": ["summary", "start_time", "end_time"],
+        },
+    },
+    "check_availability": {
+        "name": "prepare_availability_check",
+        "description": "Extract time range for availability check from the conversation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_time": {"type": "string", "description": "ISO 8601 start time"},
+                "end_time": {"type": "string", "description": "ISO 8601 end time"},
+            },
+            "required": ["start_time", "end_time"],
+        },
+    },
+}
+
+ACTION_EXTRACTION_PROMPT = """\
+You are a parameter extraction system. Analyze the conversation and extract the \
+exact parameters needed to execute the requested action. Use the provided tool to \
+output the result. Be precise — use the details the user provided.\
+"""
+
+
+async def extract_action_from_conversation(
+    messages: List[Dict[str, str]], action_type: str
+) -> Optional[dict]:
+    """Extract structured action parameters from the conversation using tool_use."""
+    tool = ACTION_EXTRACTION_TOOLS.get(action_type)
+    if not tool:
+        return None
+
+    try:
+        response = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=ACTION_EXTRACTION_PROMPT,
+            messages=messages,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": tool["name"]},
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == tool["name"]:
+                return block.input
+
+        return None
+    except Exception:
+        return None
 
 
 async def get_ai_response(messages: List[Dict[str, str]]) -> str:

@@ -18,6 +18,10 @@ interface MessageMetadata {
     }>;
   };
   workflow_id?: number;
+  action_type?: string;
+  action_params?: Record<string, unknown>;
+  success?: boolean;
+  details?: Record<string, unknown>;
 }
 
 interface Message {
