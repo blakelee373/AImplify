@@ -296,7 +296,7 @@ function ActionResultBanner({
     if (actionType === "check_availability") {
       const result = details.result as Record<string, unknown> | undefined;
       const available = result?.available ?? details.available;
-      const conflicts = (result?.conflicts || []) as Array<Record<string, string>>;
+      const conflicts = (result?.conflicts || details.conflicts || []) as Array<Record<string, string>>;
       if (available) {
         return (
           <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium">

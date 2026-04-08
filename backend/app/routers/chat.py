@@ -75,9 +75,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     else:
                         content += "\n\n[System: Calendar returned no events for that time range.]"
                 elif action_type == "check_availability" and success:
-                    result = details.get("result", details)
-                    avail = result.get("available", None)
-                    conflicts = result.get("conflicts", [])
+                    avail = details.get("available", None)
+                    conflicts = details.get("conflicts", [])
+                    if avail is None:
+                        # Fallback: nested under "result" key
+                        nested = details.get("result", {})
+                        avail = nested.get("available", None)
+                        conflicts = nested.get("conflicts", [])
                     if avail:
                         content += "\n\n[System: That time slot is available — no conflicts.]"
                     else:
@@ -88,6 +92,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 else:
                     error = details.get("error", "Unknown error")
                     content += f"\n\n[System: Action '{action_type}' failed. Error: {error}]"
+            elif msg_type == "action_request":
+                # Let Claude know a confirmation card was shown so it emits
+                # <action_confirmed> (not another <action_request>) when the user says "yes"
+                action_type = m.metadata_json.get("action_type", "")
+                content += f"\n\n[System: A confirmation card for '{action_type}' is being shown to the user. " \
+                           "When they confirm, respond with a short acknowledgment and use <action_confirmed> — " \
+                           "do NOT re-summarize or show another <action_request>.]"
         messages.append({"role": m.role, "content": content})
 
     # Get AI response and parse for signal tags
@@ -121,8 +132,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         # Extract structured action parameters via a second Claude call
         params = await extract_action_from_conversation(messages, action_request_type, timezone=tz)
 
-        # Read-only actions (list_events) execute immediately — no confirmation needed
-        if action_request_type == "list_events":
+        # Read-only actions execute immediately — no confirmation needed
+        if action_request_type in ("list_events", "check_availability"):
             exec_meta = {"action_type": action_request_type, "action_params": params or {}}
             result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
             metadata = {
