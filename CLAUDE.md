@@ -21,6 +21,8 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - Tags are parsed in `parse_ai_response()` in `ai_engine.py`, stripped from user-visible content
 - Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`
 - New action types must be added to: `ACTION_EXTRACTION_TOOLS` (ai_engine.py), `ACTION_PROVIDER` map (chat.py), `_execute_chat_action` (chat.py), `ACTION_LABELS` (MessageBubble.tsx)
+- Handler ordering in chat.py matters: workflow query handlers (list/status/activity/run) must run BEFORE `_detect_action_gathering` safety net to prevent false positives on words like "schedule" in workflow descriptions
+- When adding new AI capabilities via signal tags, the system prompt must assertively state the AI HAS the capability (like connection status does) — otherwise the AI may claim it can't do it
 
 ## Tool Connection System
 - Connection status is dynamic in the system prompt — built by `_build_connection_status()` from actual DB state
