@@ -55,7 +55,51 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         Message.conversation_id == conversation.id
     ).order_by(Message.created_at).all()
 
-    messages = [{"role": m.role, "content": m.content} for m in history]
+    messages = []
+    for m in history:
+        content = m.content
+        # Inject action results into assistant messages so Claude sees outcomes
+        if m.role == "assistant" and m.metadata_json and isinstance(m.metadata_json, dict):
+            msg_type = m.metadata_json.get("message_type")
+            if msg_type == "action_result":
+                action_type = m.metadata_json.get("action_type", "")
+                details = m.metadata_json.get("details", {})
+                success = m.metadata_json.get("success", False)
+                if action_type == "list_events" and success:
+                    events = details.get("events", [])
+                    if events:
+                        lines = []
+                        for ev in events:
+                            lines.append(f"- {ev.get('summary', '(No title)')} | {ev.get('start', '')} to {ev.get('end', '')}")
+                        content += "\n\n[System: Calendar returned these events:\n" + "\n".join(lines) + "]"
+                    else:
+                        content += "\n\n[System: Calendar returned no events for that time range.]"
+                elif action_type == "check_availability" and success:
+                    avail = details.get("available", None)
+                    conflicts = details.get("conflicts", [])
+                    if avail is None:
+                        # Fallback: nested under "result" key
+                        nested = details.get("result", {})
+                        avail = nested.get("available", None)
+                        conflicts = nested.get("conflicts", [])
+                    if avail:
+                        content += "\n\n[System: That time slot is available — no conflicts.]"
+                    else:
+                        conflict_lines = [f"- {c.get('start', '')} to {c.get('end', '')}" for c in conflicts]
+                        content += "\n\n[System: That time slot is NOT available. Conflicts:\n" + "\n".join(conflict_lines) + "]"
+                elif success:
+                    content += f"\n\n[System: Action '{action_type}' completed successfully. Details: {details}]"
+                else:
+                    error = details.get("error", "Unknown error")
+                    content += f"\n\n[System: Action '{action_type}' failed. Error: {error}]"
+            elif msg_type == "action_request":
+                # Let Claude know a confirmation card was shown so it emits
+                # <action_confirmed> (not another <action_request>) when the user says "yes"
+                action_type = m.metadata_json.get("action_type", "")
+                content += f"\n\n[System: A confirmation card for '{action_type}' is being shown to the user. " \
+                           "When they confirm, respond with a short acknowledgment and use <action_confirmed> — " \
+                           "do NOT re-summarize or show another <action_request>.]"
+        messages.append({"role": m.role, "content": content})
 
     # Get AI response and parse for signal tags
     tz = request.timezone or "UTC"
@@ -87,11 +131,23 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if action_request_type:
         # Extract structured action parameters via a second Claude call
         params = await extract_action_from_conversation(messages, action_request_type, timezone=tz)
-        metadata = {
-            "message_type": "action_request",
-            "action_type": action_request_type,
-            "action_params": params or {},
-        }
+
+        # Read-only actions execute immediately — no confirmation needed
+        if action_request_type in ("list_events", "check_availability"):
+            exec_meta = {"action_type": action_request_type, "action_params": params or {}}
+            result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
+            metadata = {
+                "message_type": "action_result",
+                "action_type": action_request_type,
+                "success": result["status"] == "success",
+                "details": result.get("details", {}),
+            }
+        else:
+            metadata = {
+                "message_type": "action_request",
+                "action_type": action_request_type,
+                "action_params": params or {},
+            }
 
     if signals["action_confirmed"]:
         # Determine action type: from the confirmed tag, from a prior action_request, or None
@@ -336,7 +392,12 @@ async def _execute_chat_action(db: Session, action_meta: dict, conversation_id: 
             details = {"result": result, "source": "chat"}
 
         elif action_type == "list_events":
-            events = list_upcoming_events(db, max_results=5)
+            events = list_upcoming_events(
+                db,
+                max_results=10,
+                time_min=params.get("time_min"),
+                time_max=params.get("time_max"),
+            )
             description = "Listed upcoming calendar events"
             details = {"events": events, "count": len(events), "source": "chat"}
             result = {"events": events, "count": len(events)}

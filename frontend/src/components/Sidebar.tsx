@@ -2,20 +2,21 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Home, MessageSquare, LayoutDashboard, Zap, Settings, type LucideIcon } from "lucide-react";
 
 interface NavItem {
   href: string;
   label: string;
-  icon: string;
+  icon: LucideIcon;
   exact?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { href: "/", label: "Home", icon: "🏠", exact: true },
-  { href: "/chat", label: "Chat", icon: "💬" },
-  { href: "/dashboard", label: "Dashboard", icon: "📊", exact: true },
-  { href: "/dashboard/workflows", label: "Workflows", icon: "⚡" },
-  { href: "/settings/integrations", label: "Settings", icon: "⚙️" },
+  { href: "/", label: "Home", icon: Home, exact: true },
+  { href: "/chat", label: "Chat", icon: MessageSquare },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, exact: true },
+  { href: "/dashboard/workflows", label: "Workflows", icon: Zap },
+  { href: "/settings/integrations", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
@@ -45,7 +46,7 @@ export function Sidebar() {
                   : "text-stone-300 hover:bg-sidebar-hover hover:text-white"
               }`}
             >
-              <span>{item.icon}</span>
+              <item.icon className="w-4 h-4 shrink-0" />
               {item.label}
             </Link>
           );

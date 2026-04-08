@@ -85,7 +85,13 @@ PARAM_GEN_SYSTEM = """\
 You are a parameter generator for an AI automation system. Given a workflow step \
 description and runtime context, generate the exact parameters needed to execute \
 the action. Be specific, professional, and use information from the context to \
-personalize the output. Use the provided tool to return the parameters.\
+personalize the output. Use the provided tool to return the parameters.
+
+You ARE connected to the owner's Gmail and Google Calendar. You CAN send emails \
+and create events. NEVER claim you can't do something — just generate the parameters.
+
+For dates and times, use the day reference below to convert day names to exact dates. \
+Always produce full ISO 8601 timestamps with the correct timezone offset.\
 """
 
 # ── Map action_type to (tool, service function) ─────────────────────────────
@@ -122,7 +128,26 @@ async def _generate_params(
     context: Dict,
 ) -> Optional[dict]:
     """Use Claude to generate action parameters from the step description and context."""
+    from datetime import datetime, timedelta, timezone as tz
+    from zoneinfo import ZoneInfo
+
     context_str = "\n".join(f"- {k}: {v}" for k, v in context.items()) if context else "No additional context provided."
+
+    # Build timezone-aware date reference
+    user_tz = context.get("timezone", "UTC")
+    try:
+        now = datetime.now(ZoneInfo(user_tz))
+    except Exception:
+        now = datetime.now(tz.utc)
+
+    day_lines = []
+    for i in range(7):
+        d = now + timedelta(days=i)
+        label = "Today" if i == 0 else "Tomorrow" if i == 1 else d.strftime("%A")
+        day_lines.append(f"- {label}: {d.strftime('%A, %B %d, %Y')}")
+    week_ref = "\n".join(day_lines)
+
+    system = PARAM_GEN_SYSTEM + f"\n\nToday is {now.strftime('%A, %B %d, %Y')}. Timezone: {user_tz}.\n\nUpcoming days:\n{week_ref}"
 
     user_message = (
         f"Workflow: {workflow_name}\n"
@@ -135,7 +160,7 @@ async def _generate_params(
         response = await client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=1024,
-            system=PARAM_GEN_SYSTEM,
+            system=system,
             messages=[{"role": "user", "content": user_message}],
             tools=[tool],
             tool_choice={"type": "tool", "name": tool["name"]},
