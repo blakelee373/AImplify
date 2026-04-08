@@ -13,6 +13,7 @@ from app.schemas.chat import (
     MessageResponse,
 )
 from app.models.activity_log import ActivityLog
+from app.models.integration import Integration
 from app.models.workflow import Workflow
 from app.services.ai_engine import (
     get_ai_response,
@@ -99,13 +100,39 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 content += f"\n\n[System: A confirmation card for '{action_type}' is being shown to the user. " \
                            "When they confirm, respond with a short acknowledgment and use <action_confirmed> — " \
                            "do NOT re-summarize or show another <action_request>.]"
+            elif msg_type == "connect_tool":
+                provider = m.metadata_json.get("provider", "")
+                content += f"\n\n[System: A 'Connect' button for '{provider}' is being shown to the user. " \
+                           "Wait for them to complete the connection.]"
+            elif msg_type == "disconnect_request":
+                provider = m.metadata_json.get("provider", "")
+                content += f"\n\n[System: A disconnect confirmation for '{provider}' is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <disconnect_confirmed> — " \
+                           "do NOT re-summarize or show another <disconnect_tool>.]"
+            elif msg_type == "disconnect_result":
+                provider = m.metadata_json.get("provider", "")
+                success = m.metadata_json.get("success", False)
+                if success:
+                    content += f"\n\n[System: {provider} has been disconnected successfully.]"
+                else:
+                    content += f"\n\n[System: Failed to disconnect {provider}.]"
         messages.append({"role": m.role, "content": content})
 
     # Get AI response and parse for signal tags
     tz = request.timezone or "UTC"
     all_workflows = db.query(Workflow).all()
     wf_names = [w.name for w in all_workflows] if all_workflows else None
-    raw_content = await get_ai_response(messages, timezone=tz, workflow_names=wf_names)
+
+    # Query integration connection status for dynamic prompt
+    connected_integrations = db.query(Integration).filter(
+        Integration.status == "connected"
+    ).all()
+    connected_providers = [i.provider for i in connected_integrations]
+
+    raw_content = await get_ai_response(
+        messages, timezone=tz, workflow_names=wf_names,
+        connected_providers=connected_providers,
+    )
     signals = parse_ai_response(raw_content)
     clean_content = signals["clean_content"]
 
@@ -128,26 +155,67 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     # Detect action request — from tag or from response content as fallback
     action_request_type = signals["action_request"] or _detect_action_from_content(clean_content)
 
-    if action_request_type:
-        # Extract structured action parameters via a second Claude call
-        params = await extract_action_from_conversation(messages, action_request_type, timezone=tz)
+    # Map action types to the provider they require
+    ACTION_PROVIDER = {
+        "send_email": "gmail",
+        "create_event": "google_calendar",
+        "update_event": "google_calendar",
+        "check_availability": "google_calendar",
+        "list_events": "google_calendar",
+    }
 
-        # Read-only actions execute immediately — no confirmation needed
-        if action_request_type in ("list_events", "check_availability"):
-            exec_meta = {"action_type": action_request_type, "action_params": params or {}}
-            result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
+    # Safety net: if the AI is gathering fields for a disconnected tool
+    # (asking for subject, time, etc. without emitting a connect_tool tag),
+    # intercept and show a connect card instead.
+    if not action_request_type and not signals.get("connect_tool") and not metadata:
+        gathering_action = _detect_action_gathering(clean_content)
+        if gathering_action:
+            required_provider = ACTION_PROVIDER.get(gathering_action)
+            if required_provider and required_provider not in connected_providers:
+                provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
+                clean_content = (
+                    f"To do that, we'll need to connect your {provider_name} first. "
+                    "Click below to get that set up — it only takes a moment!"
+                )
+                metadata = {
+                    "message_type": "connect_tool",
+                    "provider": required_provider,
+                }
+
+    if action_request_type:
+        # Check if the required tool is connected before proceeding
+        required_provider = ACTION_PROVIDER.get(action_request_type)
+        if required_provider and required_provider not in connected_providers:
+            # Tool not connected — show connect card instead of action card
+            provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
+            clean_content = (
+                f"To do that, we'll need to connect your {provider_name} first. "
+                "Click below to get that set up — it only takes a moment!"
+            )
             metadata = {
-                "message_type": "action_result",
-                "action_type": action_request_type,
-                "success": result["status"] == "success",
-                "details": result.get("details", {}),
+                "message_type": "connect_tool",
+                "provider": required_provider,
             }
         else:
-            metadata = {
-                "message_type": "action_request",
-                "action_type": action_request_type,
-                "action_params": params or {},
-            }
+            # Extract structured action parameters via a second Claude call
+            params = await extract_action_from_conversation(messages, action_request_type, timezone=tz)
+
+            # Read-only actions execute immediately — no confirmation needed
+            if action_request_type in ("list_events", "check_availability"):
+                exec_meta = {"action_type": action_request_type, "action_params": params or {}}
+                result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
+                metadata = {
+                    "message_type": "action_result",
+                    "action_type": action_request_type,
+                    "success": result["status"] == "success",
+                    "details": result.get("details", {}),
+                }
+            else:
+                metadata = {
+                    "message_type": "action_request",
+                    "action_type": action_request_type,
+                    "action_params": params or {},
+                }
 
     if signals["action_confirmed"]:
         # Determine action type: from the confirmed tag, from a prior action_request, or None
@@ -163,21 +231,34 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             action_type = None
 
         if action_type:
-            # Re-extract params from the full conversation (captures any additions)
-            fresh_params = await extract_action_from_conversation(
-                messages, action_type, timezone=tz
-            )
-            exec_meta = {
-                "action_type": action_type,
-                "action_params": fresh_params or (action_meta or {}).get("action_params", {}),
-            }
-            result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
-            metadata = {
-                "message_type": "action_result",
-                "action_type": action_type,
-                "success": result["status"] == "success",
-                "details": result.get("details", {}),
-            }
+            # Guard: check if required tool is connected before executing
+            required_provider = ACTION_PROVIDER.get(action_type)
+            if required_provider and required_provider not in connected_providers:
+                provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
+                clean_content = (
+                    f"Hmm, it looks like your {provider_name} isn't connected yet. "
+                    "Let's get that set up first!"
+                )
+                metadata = {
+                    "message_type": "connect_tool",
+                    "provider": required_provider,
+                }
+            else:
+                # Re-extract params from the full conversation (captures any additions)
+                fresh_params = await extract_action_from_conversation(
+                    messages, action_type, timezone=tz
+                )
+                exec_meta = {
+                    "action_type": action_type,
+                    "action_params": fresh_params or (action_meta or {}).get("action_params", {}),
+                }
+                result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
+                metadata = {
+                    "message_type": "action_result",
+                    "action_type": action_type,
+                    "success": result["status"] == "success",
+                    "details": result.get("details", {}),
+                }
 
     # ── Workflow management (pause / resume / delete) ──────────────────
     if signals["workflow_manage"]:
@@ -227,6 +308,57 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "detail": "Could not find that workflow.",
             }
 
+    # ── Tool connections (connect / disconnect) ────────────────────────
+    if signals["connect_tool"]:
+        provider = signals["connect_tool"]
+        valid_providers = {"gmail", "google_calendar"}
+        if provider in valid_providers:
+            already = provider in connected_providers
+            if already:
+                # AI shouldn't emit this, but handle gracefully
+                metadata = {
+                    "message_type": "connect_already",
+                    "provider": provider,
+                }
+            else:
+                metadata = {
+                    "message_type": "connect_tool",
+                    "provider": provider,
+                }
+
+    if signals["disconnect_tool"]:
+        provider = signals["disconnect_tool"]
+        metadata = {
+            "message_type": "disconnect_request",
+            "provider": provider,
+        }
+
+    if signals["disconnect_confirmed"]:
+        provider = signals["disconnect_confirmed"]
+        try:
+            from app.routers.integrations import _disconnect
+            _disconnect(provider, db)
+            metadata = {
+                "message_type": "disconnect_result",
+                "provider": provider,
+                "success": True,
+            }
+            # Log the disconnection
+            provider_name = "Gmail" if provider == "gmail" else "Google Calendar"
+            log = ActivityLog(
+                action_type="tool_disconnected",
+                description=f"{provider_name} disconnected via chat",
+                details={"provider": provider, "source": "chat"},
+            )
+            db.add(log)
+        except Exception as e:
+            metadata = {
+                "message_type": "disconnect_result",
+                "provider": provider,
+                "success": False,
+                "error": str(e),
+            }
+
     # Save assistant message
     assistant_message = Message(
         conversation_id=conversation.id,
@@ -250,6 +382,36 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
 
 import re as _re
+
+
+def _detect_action_gathering(content: str) -> Optional[str]:
+    """Detect if the AI is engaging with an action request instead of suggesting connection.
+
+    Catches any response where the AI is proceeding with an email or calendar task
+    (gathering fields, offering choices, disambiguating) without suggesting a tool connection.
+    """
+    lower = content.lower()
+    # Must contain a question — the AI is asking the user something
+    if "?" not in lower:
+        return None
+    # Email: any response that engages with sending email
+    email_signals = [
+        "subject", "body", "email say", "email should", "send that email",
+        "send an email", "send the email", "draft", "write the email",
+        "who should i", "who do you want", "recipient", "send it to",
+    ]
+    if any(s in lower for s in email_signals):
+        return "send_email"
+    # Calendar: any response that engages with calendar/scheduling
+    cal_signals = [
+        "event", "meeting", "appointment", "schedule", "put on your calendar",
+        "add to your calendar", "block off", "what time", "how long should",
+        "your calendar", "time slot", "availability", "available",
+        "what's on", "show you", "check if", "free", "busy",
+    ]
+    if any(s in lower for s in cal_signals):
+        return "check_availability"
+    return None
 
 
 def _detect_action_from_content(content: str) -> Optional[str]:
@@ -334,14 +496,23 @@ async def _execute_chat_action(db: Session, action_meta: dict, conversation_id: 
 
     try:
         if action_type == "send_email":
-            result = send_email(db, params["recipient"], params["subject"], params["body"])
-            description = f"Sent email to {params['recipient']}: {params['subject']}"
+            recipient = params["recipient"]
+            cc = params.get("cc")
+            bcc = params.get("bcc")
+            result = send_email(db, recipient, params["subject"], params["body"], cc=cc, bcc=bcc)
+            # Build human-readable recipient description
+            to_str = ", ".join(recipient) if isinstance(recipient, list) else recipient
+            description = f"Sent email to {to_str}: {params['subject']}"
             details = {
-                "recipient": params["recipient"],
+                "recipient": recipient,
                 "subject": params["subject"],
                 "gmail_message_id": result.get("message_id"),
                 "source": "chat",
             }
+            if cc:
+                details["cc"] = cc
+            if bcc:
+                details["bcc"] = bcc
 
         elif action_type == "create_event":
             attendees = params.get("attendees")

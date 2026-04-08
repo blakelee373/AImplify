@@ -4,6 +4,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { api } from "@/lib/api";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 interface MessageMetadata {
   message_type?: string;
   workflow_draft?: {
@@ -22,6 +24,13 @@ interface MessageMetadata {
   action_params?: Record<string, unknown>;
   success?: boolean;
   details?: Record<string, unknown>;
+  manage_action?: string;
+  workflow_name?: string;
+  workflow_status?: string;
+  detail?: string;
+  query?: string;
+  provider?: string;
+  error?: string;
 }
 
 interface Message {
@@ -57,6 +66,9 @@ export function ChatWindow({ conversationId, onConversationCreated }: ChatWindow
   const loadedIdRef = useRef<number | null>(null);
   // Track ID created from first message so we can send follow-ups without re-loading
   const createdIdRef = useRef<number | null>(null);
+  // OAuth popup refs
+  const popupRef = useRef<Window | null>(null);
+  const popupCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -85,6 +97,107 @@ export function ChatWindow({ conversationId, onConversationCreated }: ChatWindow
       loadConversation(conversationId);
     }
   }, [conversationId, loadConversation]);
+
+  // ── OAuth popup handling ───────────────────────────────────────────────
+  const handleConnectTool = useCallback(async (provider: string) => {
+    try {
+      const data = await api.get<{ authorization_url: string }>(
+        `/api/integrations/${provider}/connect-url`
+      );
+      const popup = window.open(
+        data.authorization_url,
+        "oauth-popup",
+        "width=500,height=600,scrollbars=yes"
+      );
+
+      if (!popup) {
+        // Popup blocked — fall back to same-tab redirect
+        window.location.href = `${API_URL}/api/integrations/${provider}/connect`;
+        return;
+      }
+
+      popupRef.current = popup;
+
+      // Check if popup was closed without completing OAuth
+      popupCheckRef.current = setInterval(() => {
+        if (popup.closed) {
+          if (popupCheckRef.current) clearInterval(popupCheckRef.current);
+          popupRef.current = null;
+        }
+      }, 1000);
+    } catch {
+      // Fallback: redirect in same tab
+      window.location.href = `${API_URL}/api/integrations/${provider}/connect`;
+    }
+  }, []);
+
+  useEffect(() => {
+    const VALID_PROVIDERS = ["gmail", "google_calendar"];
+
+    function handleOAuthMessage(event: MessageEvent) {
+      // Only accept messages from our backend origin (exact match)
+      if (event.origin !== new URL(API_URL).origin) return;
+
+      if (event.data?.type === "oauth_success") {
+        const provider = event.data.provider as string;
+        if (!VALID_PROVIDERS.includes(provider)) return;
+        if (popupCheckRef.current) clearInterval(popupCheckRef.current);
+        popupRef.current = null;
+
+        // Auto-send a follow-up message to inform the AI
+        const sendId = conversationId ?? createdIdRef.current;
+        const providerName = provider === "google_calendar" ? "Google Calendar" : "Gmail";
+        const text = `I just connected ${providerName}`;
+        const userMsg: Message = { id: Date.now(), role: "user", content: text };
+        setMessages((prev) => [...prev, userMsg]);
+        setLoading(true);
+
+        api
+          .post<ChatResponse>("/api/chat", {
+            message: text,
+            conversation_id: sendId,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          })
+          .then((data) => {
+            if (!sendId && data.conversation_id) {
+              createdIdRef.current = data.conversation_id;
+              onConversationCreated?.(data.conversation_id);
+            }
+            setMessages((prev) => [...prev, data.message]);
+          })
+          .catch(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now(),
+                role: "assistant",
+                content: `${providerName} connected! You can now use it.`,
+              },
+            ]);
+          })
+          .finally(() => setLoading(false));
+      }
+
+      if (event.data?.type === "oauth_error") {
+        if (popupCheckRef.current) clearInterval(popupCheckRef.current);
+        popupRef.current = null;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            role: "assistant",
+            content: `Connection failed: ${event.data.error || "Unknown error"}. You can try again.`,
+          },
+        ]);
+      }
+    }
+
+    window.addEventListener("message", handleOAuthMessage);
+    return () => {
+      window.removeEventListener("message", handleOAuthMessage);
+      if (popupCheckRef.current) clearInterval(popupCheckRef.current);
+    };
+  }, [conversationId, onConversationCreated]);
 
   async function handleSend() {
     const text = input.trim();
@@ -145,6 +258,7 @@ export function ChatWindow({ conversationId, onConversationCreated }: ChatWindow
             role={msg.role}
             content={msg.content}
             metadata={msg.metadata}
+            onConnectTool={handleConnectTool}
           />
         ))}
         {loading && (

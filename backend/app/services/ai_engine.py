@@ -17,11 +17,7 @@ IMPORTANT RULES:
 - Ask ONE question at a time. Never dump a list of questions.
 - When possible, offer 2-4 simple choices instead of open-ended questions.
 - Keep responses short and conversational — 2-3 sentences max per turn.
-- You ARE connected to the owner's Gmail and Google Calendar. You CAN send emails, \
-create events, list events, and check availability. NEVER say you can't do these things. \
-NEVER say "I can't actually see your calendar" or "I don't have access" — you DO have access. \
-Always use the appropriate hidden tags to execute the action. If an action fails, the system \
-will tell you — do not preemptively claim you can't do something.
+{connection_status}
 - In PREVIOUS messages in this conversation, you may see "[System: ...]" notes appended \
 to your own earlier responses. These are REAL results injected by the backend AFTER your \
 prior action executed (e.g., actual calendar events, availability conflicts). \
@@ -63,7 +59,8 @@ check_availability, NOT create_event. The word "can" signals they're asking abou
 • Go ahead and create the event?"
 
 REQUIRED FIELDS — you MUST have ALL of these before showing a confirmation:
-- send_email: (1) recipient email address, (2) subject line, (3) what the email should say
+- send_email: (1) recipient email address(es) — can be one or multiple, (2) subject line, (3) what the email should say. \
+Optional: CC and BCC recipients. If the user mentions CC or BCC, ask who to include.
 - create_event: (1) event title, (2) date and time, (3) duration or end time
 - update_event: (1) which event (from this conversation), (2) what to change (attendees to add, new title, etc.)
 - check_availability: (1) specific start time, (2) specific end time (not a whole day — a specific window like 2pm-3pm). \
@@ -205,6 +202,44 @@ When the user confirms ("yes," "go ahead," "do it"):
 <workflow_manage_confirmed>ACTION:WORKFLOW_NAME</workflow_manage_confirmed>
 
 If the user says "no" or changes their mind, acknowledge it and move on.
+
+TOOL CONNECTIONS — CONNECT OR DISCONNECT TOOLS:
+
+Available tools that can be connected: Gmail, Google Calendar.
+Provider names for tags: gmail, google_calendar.
+
+When the owner asks to connect a tool (e.g., "connect my Gmail", "hook up my calendar", \
+"set up email"):
+1. Briefly explain what connecting will allow (e.g., "Connecting your Gmail will let me \
+send emails on your behalf — things like welcome messages, follow-ups, and reminders.")
+2. At the very end of your message, append this hidden tag on its own line:
+<connect_tool>PROVIDER</connect_tool>
+Replace PROVIDER with: gmail or google_calendar
+
+When you detect the owner needs a tool that isn't connected yet (e.g., they ask to send \
+an email but Gmail isn't connected, or they ask to check their calendar but Google Calendar \
+isn't connected), proactively suggest connecting it:
+"To send that email, we'll need to connect your Gmail first. Want to do that now?"
+And include: <connect_tool>gmail</connect_tool>
+
+When the owner asks to disconnect a tool (e.g., "disconnect my Gmail", "remove calendar \
+access", "unlink my email"):
+1. Confirm what will happen: "This will revoke my access to your Gmail. I won't be able \
+to send emails until you reconnect it. Want me to go ahead?"
+2. At the very end of your message, append this hidden tag on its own line:
+<disconnect_tool>PROVIDER</disconnect_tool>
+
+When the owner confirms disconnecting ("yes", "go ahead", "do it"):
+1. Respond with something short like "Done — I've disconnected your Gmail."
+2. At the very end of your message, append this hidden tag on its own line:
+<disconnect_confirmed>PROVIDER</disconnect_confirmed>
+
+If the user says "no" or changes their mind about disconnecting, acknowledge it and move on.
+
+IMPORTANT: Only use <connect_tool> for tools that are NOT currently connected. \
+Only use <disconnect_tool> and <disconnect_confirmed> for tools that ARE currently connected. \
+Check the connection status information provided above. If a tool is already connected and \
+the owner asks to connect it, just let them know it's already set up.
 """
 
 # Tool definition for structured workflow extraction
@@ -321,6 +356,24 @@ def parse_ai_response(raw_content: str) -> dict:
             "workflow_name": manage_confirmed_match.group(2).strip(),
         }
 
+    # Extract connect_tool (e.g., <connect_tool>gmail</connect_tool>)
+    connect_tool = None
+    connect_match = re.search(r"<connect_tool>(\w+)</connect_tool>", raw_content)
+    if connect_match:
+        connect_tool = connect_match.group(1)
+
+    # Extract disconnect_tool (e.g., <disconnect_tool>gmail</disconnect_tool>)
+    disconnect_tool = None
+    disconnect_match = re.search(r"<disconnect_tool>(\w+)</disconnect_tool>", raw_content)
+    if disconnect_match:
+        disconnect_tool = disconnect_match.group(1)
+
+    # Extract disconnect_confirmed (e.g., <disconnect_confirmed>gmail</disconnect_confirmed>)
+    disconnect_confirmed = None
+    disconnect_confirmed_match = re.search(r"<disconnect_confirmed>(\w+)</disconnect_confirmed>", raw_content)
+    if disconnect_confirmed_match:
+        disconnect_confirmed = disconnect_confirmed_match.group(1)
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
@@ -332,6 +385,12 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(manage_match.group(0), "")
     if manage_confirmed_match:
         clean = clean.replace(manage_confirmed_match.group(0), "")
+    if connect_match:
+        clean = clean.replace(connect_match.group(0), "")
+    if disconnect_match:
+        clean = clean.replace(disconnect_match.group(0), "")
+    if disconnect_confirmed_match:
+        clean = clean.replace(disconnect_confirmed_match.group(0), "")
     clean = clean.strip()
 
     return {
@@ -342,6 +401,9 @@ def parse_ai_response(raw_content: str) -> dict:
         "action_confirmed": action_confirmed,
         "workflow_manage": workflow_manage,
         "workflow_manage_confirmed": workflow_manage_confirmed,
+        "connect_tool": connect_tool,
+        "disconnect_tool": disconnect_tool,
+        "disconnect_confirmed": disconnect_confirmed,
     }
 
 
@@ -354,9 +416,23 @@ ACTION_EXTRACTION_TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "recipient": {"type": "string", "description": "Email address"},
+                "recipient": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses of the main recipients (To field)",
+                },
                 "subject": {"type": "string", "description": "Email subject line"},
                 "body": {"type": "string", "description": "Email body, friendly and professional"},
+                "cc": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses to CC (optional)",
+                },
+                "bcc": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses to BCC (optional)",
+                },
             },
             "required": ["recipient", "subject", "body"],
         },
@@ -532,10 +608,71 @@ def match_workflow_by_name(db_workflows: list, name_query: str) -> Optional[obje
     return best if best_score > 0 else None
 
 
+PROVIDER_DISPLAY = {
+    "gmail": {"name": "Gmail", "capabilities": "send emails"},
+    "google_calendar": {"name": "Google Calendar", "capabilities": "create events, list events, and check availability"},
+}
+
+
+def _build_connection_status(connected_providers: Optional[List[str]] = None) -> str:
+    """Build dynamic connection status string for the system prompt."""
+    all_providers = set(PROVIDER_DISPLAY.keys())
+
+    if connected_providers:
+        connected_set = set(connected_providers) & all_providers
+        disconnected = all_providers - connected_set
+    else:
+        connected_set = set()
+        disconnected = all_providers
+
+    parts = []
+    if connected_set:
+        names = [PROVIDER_DISPLAY[p]["name"] for p in sorted(connected_set)]
+        caps = [PROVIDER_DISPLAY[p]["capabilities"] for p in sorted(connected_set)]
+        parts.append(
+            f"You ARE connected to the owner's {' and '.join(names)}. "
+            f"You CAN {' and '.join(caps)}. "
+            "NEVER say you can't do these things. "
+            'NEVER say "I can\'t actually see your calendar" or "I don\'t have access" — you DO have access. '
+            "Always use the appropriate hidden tags to execute the action. "
+            "If an action fails, the system will tell you — do not preemptively claim you can't do something."
+        )
+    if disconnected:
+        disc_names = [PROVIDER_DISPLAY[p]["name"] for p in sorted(disconnected)]
+        disc_providers = [p for p in sorted(disconnected)]
+        tool_examples = []
+        for p in disc_providers:
+            if p == "gmail":
+                tool_examples.append("sending emails requires Gmail")
+            elif p == "google_calendar":
+                tool_examples.append("calendar actions require Google Calendar")
+        parts.append(
+            f"CRITICAL: You are NOT connected to: {', '.join(disc_names)}. "
+            f"({', '.join(tool_examples)}). "
+            "You CANNOT use disconnected tools. Do NOT attempt any action that requires a "
+            "disconnected tool — do NOT start gathering fields (like asking for a subject line, "
+            "recipient, event time, etc.) for an action that needs a disconnected tool. "
+            "Instead, IMMEDIATELY suggest connecting it and include the <connect_tool> tag. "
+            "For example, if Gmail is not connected and the user says 'send an email to X', "
+            "respond with: 'To send that email, we'll need to connect your Gmail first. "
+            "Click below to get that set up!' and include <connect_tool>gmail</connect_tool>."
+        )
+    elif not connected_set:
+        parts.append(
+            "CRITICAL: You are NOT connected to any tools yet. You CANNOT send emails, "
+            "create events, or do anything that requires Gmail or Google Calendar. "
+            "Do NOT start gathering fields for any action. Instead, IMMEDIATELY suggest "
+            "connecting the needed tool and include the <connect_tool> tag."
+        )
+
+    return "\n".join(parts)
+
+
 async def get_ai_response(
     messages: List[Dict[str, str]],
     timezone: str = "UTC",
     workflow_names: Optional[List[str]] = None,
+    connected_providers: Optional[List[str]] = None,
 ) -> str:
     """Send messages to Claude and return the assistant's response."""
     from datetime import datetime, timezone as tz
@@ -557,7 +694,11 @@ async def get_ai_response(
         day_lines.append(f"- {label}: {d.strftime('%A, %B %d, %Y')}")
     week_ref = "\n".join(day_lines)
 
-    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}. The user's timezone is {tz_info}.\n\nUpcoming days for reference:\n{week_ref}"
+    # Inject dynamic connection status into the prompt
+    connection_status = _build_connection_status(connected_providers)
+    prompt = SYSTEM_PROMPT.replace("{connection_status}", connection_status)
+
+    system = prompt + f"\n\nToday's date is {today}. The user's timezone is {tz_info}.\n\nUpcoming days for reference:\n{week_ref}"
 
     if workflow_names:
         wf_list = ", ".join(f'"{n}"' for n in workflow_names)
