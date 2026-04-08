@@ -20,9 +20,11 @@ from app.services.ai_engine import (
     parse_ai_response,
     extract_workflow_from_conversation,
     extract_action_from_conversation,
+    extract_run_context_from_conversation,
     match_workflow_by_name,
 )
 from app.services.workflow_engine import create_workflow_from_draft
+from app.services.workflow_runner import run_workflow
 from app.services.gmail import send_email
 from app.services.calendar import create_event, update_event, check_availability, list_upcoming_events
 
@@ -116,6 +118,36 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     content += f"\n\n[System: {provider} has been disconnected successfully.]"
                 else:
                     content += f"\n\n[System: Failed to disconnect {provider}.]"
+            elif msg_type == "workflow_manage_request":
+                action = m.metadata_json.get("manage_action", "")
+                wf_name = m.metadata_json.get("workflow_name", "")
+                content += f"\n\n[System: A confirmation card to {action} '{wf_name}' is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <workflow_manage_confirmed> — " \
+                           "do NOT re-summarize or show another <workflow_manage>.]"
+            elif msg_type == "workflow_run_request":
+                wf_name = m.metadata_json.get("workflow_name", "")
+                content += f"\n\n[System: A confirmation card to run '{wf_name}' is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <workflow_run_confirmed> — " \
+                           "do NOT re-summarize or show another <workflow_run>.]"
+            elif msg_type == "workflow_run_result":
+                success = m.metadata_json.get("success", False)
+                wf_name = m.metadata_json.get("workflow_name", "")
+                steps = m.metadata_json.get("steps_executed", 0)
+                if success:
+                    content += f"\n\n[System: Workflow '{wf_name}' ran successfully — {steps} step(s) completed.]"
+                else:
+                    error = m.metadata_json.get("error", "")
+                    content += f"\n\n[System: Workflow '{wf_name}' failed. Error: {error}]"
+            elif msg_type == "workflow_list":
+                wfs = m.metadata_json.get("workflows", [])
+                content += f"\n\n[System: Workflow list was shown to user — {len(wfs)} workflow(s).]"
+            elif msg_type == "workflow_activity":
+                acts = m.metadata_json.get("activity", [])
+                content += f"\n\n[System: Activity summary was shown — {len(acts)} recent entries.]"
+            elif msg_type == "workflow_status":
+                wf = m.metadata_json.get("workflow", {})
+                logs = m.metadata_json.get("recent_activity", [])
+                content += f"\n\n[System: Status for '{wf.get('name', '')}' was shown — {len(logs)} recent activity entries.]"
         messages.append({"role": m.role, "content": content})
 
     # Get AI response and parse for signal tags
@@ -306,6 +338,147 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "success": False,
                 "workflow_name": manage["workflow_name"],
                 "detail": "Could not find that workflow.",
+            }
+
+    # ── Workflow queries (list, status, activity, run) ────────────────
+    if signals["workflow_list"]:
+        wf_data = []
+        for w in all_workflows:
+            wf_data.append({
+                "id": w.id,
+                "name": w.name,
+                "status": w.status,
+                "description": w.description,
+                "trigger_type": w.trigger_type,
+                "step_count": len(w.steps) if w.steps else 0,
+                "updated_at": w.updated_at.isoformat() if w.updated_at else None,
+            })
+        metadata = {
+            "message_type": "workflow_list",
+            "workflows": wf_data,
+        }
+
+    if signals["workflow_status"]:
+        wf_name = signals["workflow_status"]
+        matched = match_workflow_by_name(all_workflows, wf_name)
+        if matched:
+            # Get recent activity for this workflow
+            recent_logs = db.query(ActivityLog).filter(
+                ActivityLog.workflow_id == matched.id
+            ).order_by(ActivityLog.created_at.desc()).limit(10).all()
+            log_data = []
+            for log in recent_logs:
+                log_data.append({
+                    "action_type": log.action_type,
+                    "description": log.description,
+                    "created_at": log.created_at.isoformat() if log.created_at else None,
+                    "details": log.details,
+                })
+            metadata = {
+                "message_type": "workflow_status",
+                "workflow": {
+                    "id": matched.id,
+                    "name": matched.name,
+                    "status": matched.status,
+                    "description": matched.description,
+                    "trigger_type": matched.trigger_type,
+                    "step_count": len(matched.steps) if matched.steps else 0,
+                    "updated_at": matched.updated_at.isoformat() if matched.updated_at else None,
+                },
+                "recent_activity": log_data,
+            }
+        else:
+            metadata = {
+                "message_type": "workflow_manage_not_found",
+                "manage_action": "check status of",
+                "query": wf_name,
+            }
+
+    if signals["workflow_activity"]:
+        recent_logs = db.query(ActivityLog).order_by(
+            ActivityLog.created_at.desc()
+        ).limit(20).all()
+        log_data = []
+        for log in recent_logs:
+            log_data.append({
+                "action_type": log.action_type,
+                "description": log.description,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+                "workflow_id": log.workflow_id,
+            })
+        metadata = {
+            "message_type": "workflow_activity",
+            "activity": log_data,
+        }
+
+    if signals["workflow_run"]:
+        wf_name = signals["workflow_run"]
+        matched = match_workflow_by_name(all_workflows, wf_name)
+        if matched:
+            metadata = {
+                "message_type": "workflow_run_request",
+                "workflow_id": matched.id,
+                "workflow_name": matched.name,
+                "workflow_status": matched.status,
+                "step_count": len(matched.steps) if matched.steps else 0,
+            }
+        else:
+            metadata = {
+                "message_type": "workflow_manage_not_found",
+                "manage_action": "run",
+                "query": wf_name,
+            }
+
+    if signals["workflow_run_confirmed"]:
+        wf_name = signals["workflow_run_confirmed"]
+        # Find the pending run request from a prior message
+        prior = _find_latest_run_request(db, conversation.id)
+        wf_id = prior.get("workflow_id") if prior else None
+
+        if not wf_id:
+            matched = match_workflow_by_name(all_workflows, wf_name)
+            wf_id = matched.id if matched else None
+
+        if wf_id:
+            wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
+            if wf and wf.status != "paused" and wf.steps:
+                # Extract runtime context from conversation
+                context = await extract_run_context_from_conversation(messages, timezone=tz)
+                results = await run_workflow(db, wf, context)
+                all_success = all(r["status"] == "success" for r in results)
+                metadata = {
+                    "message_type": "workflow_run_result",
+                    "workflow_name": wf.name,
+                    "success": all_success,
+                    "steps_executed": len(results),
+                    "results": results,
+                }
+            elif wf and wf.status == "paused":
+                metadata = {
+                    "message_type": "workflow_run_result",
+                    "workflow_name": wf.name if wf else wf_name,
+                    "success": False,
+                    "steps_executed": 0,
+                    "results": [],
+                    "error": "This workflow is paused — resume it first.",
+                }
+            else:
+                metadata = {
+                    "message_type": "workflow_run_result",
+                    "workflow_name": wf.name if wf else wf_name,
+                    "success": False,
+                    "steps_executed": 0,
+                    "results": [],
+                    "error": "Workflow has no steps to execute.",
+                }
+        else:
+            metadata = {
+                "message_type": "workflow_run_result",
+                "workflow_name": wf_name,
+                "success": False,
+                "steps_executed": 0,
+                "results": [],
+                "error": "Could not find that workflow.",
             }
 
     # ── Tool connections (connect / disconnect) ────────────────────────
@@ -601,6 +774,20 @@ def _find_latest_manage_request(db: Session, conversation_id: int) -> Optional[d
     for msg in msgs:
         if msg.metadata_json and isinstance(msg.metadata_json, dict):
             if msg.metadata_json.get("message_type") == "workflow_manage_request":
+                return msg.metadata_json
+    return None
+
+
+def _find_latest_run_request(db: Session, conversation_id: int) -> Optional[dict]:
+    """Find the most recent workflow_run_request metadata in this conversation."""
+    msgs = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).all()
+
+    for msg in msgs:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "workflow_run_request":
                 return msg.metadata_json
     return None
 
