@@ -361,6 +361,18 @@ ACTION_EXTRACTION_TOOLS = {
             "required": [],
         },
     },
+    "list_events": {
+        "name": "prepare_list_events",
+        "description": "Extract optional date range for listing calendar events.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time_min": {"type": "string", "description": "ISO 8601 start of date range (e.g. start of day: 2026-04-09T00:00:00-05:00)"},
+                "time_max": {"type": "string", "description": "ISO 8601 end of date range (e.g. end of day: 2026-04-09T23:59:59-05:00)"},
+            },
+            "required": [],
+        },
+    },
     "check_availability": {
         "name": "prepare_availability_check",
         "description": "Extract time range for availability check from the conversation.",

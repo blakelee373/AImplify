@@ -116,22 +116,26 @@ def update_event(
 def list_upcoming_events(
     db: Session,
     max_results: int = 10,
+    time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
 ) -> List[dict]:
-    """Return the next N upcoming events from the user's primary calendar."""
+    """Return upcoming events from the user's primary calendar.
+
+    If time_min/time_max are provided, only events within that range are returned.
+    """
     service = _get_calendar_service(db)
 
     now = datetime.now(timezone.utc).isoformat()
-    result = (
-        service.events()
-        .list(
-            calendarId="primary",
-            timeMin=now,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
-        )
-        .execute()
-    )
+    params = {
+        "calendarId": "primary",
+        "timeMin": time_min or now,
+        "maxResults": max_results,
+        "singleEvents": True,
+        "orderBy": "startTime",
+    }
+    if time_max:
+        params["timeMax"] = time_max
+    result = service.events().list(**params).execute()
 
     events = []
     for item in result.get("items", []):

@@ -336,7 +336,12 @@ async def _execute_chat_action(db: Session, action_meta: dict, conversation_id: 
             details = {"result": result, "source": "chat"}
 
         elif action_type == "list_events":
-            events = list_upcoming_events(db, max_results=5)
+            events = list_upcoming_events(
+                db,
+                max_results=10,
+                time_min=params.get("time_min"),
+                time_max=params.get("time_max"),
+            )
             description = "Listed upcoming calendar events"
             details = {"events": events, "count": len(events), "source": "chat"}
             result = {"events": events, "count": len(events)}
