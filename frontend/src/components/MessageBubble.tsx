@@ -18,6 +18,11 @@ interface MessageMetadata {
   action_params?: Record<string, unknown>;
   success?: boolean;
   details?: Record<string, unknown>;
+  manage_action?: string;
+  workflow_name?: string;
+  workflow_status?: string;
+  detail?: string;
+  query?: string;
 }
 
 interface MessageBubbleProps {
@@ -39,6 +44,64 @@ export function MessageBubble({ role, content, metadata }: MessageBubbleProps) {
           </div>
           <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium">
             Saved! You can view this on the Dashboard.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Workflow management request — show pending confirmation
+  if (metadata?.message_type === "workflow_manage_request") {
+    const actionStyles: Record<string, { icon: string; cls: string }> = {
+      pause: { icon: "⏸", cls: "bg-amber-50 border-amber-200 text-amber-700" },
+      resume: { icon: "▶", cls: "bg-green-50 border-green-200 text-green-700" },
+      delete: { icon: "🗑", cls: "bg-red-50 border-red-200 text-red-700" },
+    };
+    const info = actionStyles[metadata.manage_action || ""] || { icon: "⚙", cls: "bg-stone-50 border-stone-200 text-stone-700" };
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className={`${info.cls} border rounded-xl px-4 py-3 text-sm font-medium`}>
+            {info.icon} {metadata.manage_action?.charAt(0).toUpperCase()}{metadata.manage_action?.slice(1)} &ldquo;{metadata.workflow_name}&rdquo;
+            {metadata.workflow_status && (
+              <span className="text-xs font-normal ml-2">(currently {metadata.workflow_status})</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Workflow management result — show success/error
+  if (metadata?.message_type === "workflow_manage_result") {
+    const ok = metadata.success;
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className={`${ok ? "bg-green-50 border-green-200 text-green-700" : "bg-red-50 border-red-200 text-red-700"} border rounded-xl px-4 py-3 text-sm font-medium`}>
+            {metadata.detail || (ok ? "Done!" : "Something went wrong")}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Workflow management not found
+  if (metadata?.message_type === "workflow_manage_not_found") {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700 font-medium">
+            Could not find a workflow matching &ldquo;{metadata.query}&rdquo;
           </div>
         </div>
       </div>

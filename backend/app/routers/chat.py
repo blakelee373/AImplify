@@ -13,11 +13,13 @@ from app.schemas.chat import (
     MessageResponse,
 )
 from app.models.activity_log import ActivityLog
+from app.models.workflow import Workflow
 from app.services.ai_engine import (
     get_ai_response,
     parse_ai_response,
     extract_workflow_from_conversation,
     extract_action_from_conversation,
+    match_workflow_by_name,
 )
 from app.services.workflow_engine import create_workflow_from_draft
 from app.services.gmail import send_email
@@ -57,7 +59,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     # Get AI response and parse for signal tags
     tz = request.timezone or "UTC"
-    raw_content = await get_ai_response(messages, timezone=tz)
+    all_workflows = db.query(Workflow).all()
+    wf_names = [w.name for w in all_workflows] if all_workflows else None
+    raw_content = await get_ai_response(messages, timezone=tz, workflow_names=wf_names)
     signals = parse_ai_response(raw_content)
     clean_content = signals["clean_content"]
 
@@ -117,6 +121,54 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "action_type": action_type,
                 "success": result["status"] == "success",
                 "details": result.get("details", {}),
+            }
+
+    # ── Workflow management (pause / resume / delete) ──────────────────
+    if signals["workflow_manage"]:
+        manage = signals["workflow_manage"]
+        matched = match_workflow_by_name(all_workflows, manage["workflow_name"])
+        if matched:
+            metadata = {
+                "message_type": "workflow_manage_request",
+                "manage_action": manage["action"],
+                "workflow_id": matched.id,
+                "workflow_name": matched.name,
+                "workflow_status": matched.status,
+            }
+        else:
+            metadata = {
+                "message_type": "workflow_manage_not_found",
+                "manage_action": manage["action"],
+                "query": manage["workflow_name"],
+            }
+
+    if signals["workflow_manage_confirmed"]:
+        manage = signals["workflow_manage_confirmed"]
+        # Find the pending management request from a prior message
+        prior = _find_latest_manage_request(db, conversation.id)
+        wf_id = prior.get("workflow_id") if prior else None
+
+        if not wf_id:
+            # Fallback: try matching by name again
+            matched = match_workflow_by_name(all_workflows, manage["workflow_name"])
+            wf_id = matched.id if matched else None
+
+        if wf_id:
+            result = _execute_workflow_manage(db, manage["action"], wf_id)
+            metadata = {
+                "message_type": "workflow_manage_result",
+                "manage_action": manage["action"],
+                "success": result["success"],
+                "workflow_name": result.get("workflow_name", manage["workflow_name"]),
+                "detail": result.get("detail", ""),
+            }
+        else:
+            metadata = {
+                "message_type": "workflow_manage_result",
+                "manage_action": manage["action"],
+                "success": False,
+                "workflow_name": manage["workflow_name"],
+                "detail": "Could not find that workflow.",
             }
 
     # Save assistant message
@@ -305,6 +357,69 @@ async def _execute_chat_action(db: Session, action_meta: dict, conversation_id: 
 
     except Exception as e:
         return {"status": "error", "details": {"error": str(e)}}
+
+
+def _find_latest_manage_request(db: Session, conversation_id: int) -> Optional[dict]:
+    """Find the most recent workflow_manage_request metadata in this conversation."""
+    msgs = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).all()
+
+    for msg in msgs:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "workflow_manage_request":
+                return msg.metadata_json
+    return None
+
+
+def _execute_workflow_manage(db: Session, action: str, workflow_id: int) -> dict:
+    """Execute a workflow management action (pause/resume/delete)."""
+    from datetime import datetime, timezone
+    workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+    if not workflow:
+        return {"success": False, "detail": "Workflow not found"}
+
+    workflow_name = workflow.name
+
+    if action == "delete":
+        from app.models.workflow import WorkflowStep
+        db.query(WorkflowStep).filter(WorkflowStep.workflow_id == workflow_id).delete()
+        log = ActivityLog(
+            action_type="workflow_deleted",
+            description=f"Workflow '{workflow_name}' was deleted via chat",
+            details={"workflow_id": workflow_id, "workflow_name": workflow_name, "source": "chat"},
+        )
+        db.add(log)
+        db.delete(workflow)
+        db.commit()
+        return {"success": True, "workflow_name": workflow_name, "detail": f"'{workflow_name}' has been deleted."}
+
+    # Pause or resume
+    new_status = "paused" if action == "pause" else "active"
+    allowed = {"draft": ["active", "paused"], "testing": ["active", "paused"], "active": ["paused"], "paused": ["active"]}
+    if new_status not in allowed.get(workflow.status, []):
+        return {
+            "success": False,
+            "workflow_name": workflow_name,
+            "detail": f"Can't {action} — it's currently '{workflow.status}'.",
+        }
+
+    old_status = workflow.status
+    workflow.status = new_status
+    workflow.updated_at = datetime.now(timezone.utc)
+
+    log = ActivityLog(
+        workflow_id=workflow.id,
+        action_type="workflow_status_change",
+        description=f"Workflow '{workflow_name}' changed from {old_status} to {new_status} via chat",
+        details={"old_status": old_status, "new_status": new_status, "source": "chat"},
+    )
+    db.add(log)
+    db.commit()
+
+    verb = "paused" if action == "pause" else "resumed"
+    return {"success": True, "workflow_name": workflow_name, "detail": f"'{workflow_name}' has been {verb}."}
 
 
 @router.get("/conversations", response_model=List[ConversationSummary])

@@ -113,6 +113,35 @@ tackle the others right after."
 7. OFF-TOPIC — If the user goes off-topic, gently steer back:
 "That's helpful context! To keep things moving — were there any other steps in \
 that process?"
+
+WORKFLOW MANAGEMENT — PAUSE, RESUME, OR DELETE AN EXISTING PROCESS:
+
+If the user wants to pause, resume, or delete an existing process they already set up, \
+handle it as a management request. Recognize requests like:
+- "Pause the welcome email workflow"
+- "Resume reminders"
+- "Stop the follow-up process"
+- "Delete the new client welcome thing"
+- "Turn off the appointment reminder"
+- "Start the onboarding process back up"
+
+When you recognize a management request:
+1. Confirm what you understood: "Got it — you'd like to [pause/resume/delete] the \
+[workflow name]. Is that right?"
+2. For DELETE requests, always warn: "Just a heads up — deleting this will remove it \
+permanently. Want me to go ahead?"
+3. At the very end of your message, append this hidden tag on its own line:
+<workflow_manage>ACTION:WORKFLOW_NAME</workflow_manage>
+Replace ACTION with one of: pause, resume, delete
+Replace WORKFLOW_NAME with the name as you understood it from the user.
+Example: <workflow_manage>pause:New client welcome</workflow_manage>
+
+When the user confirms ("yes," "go ahead," "do it"):
+1. Respond with something short like "Done — I've [paused/resumed/deleted] that for you!"
+2. At the very end of your message, append this hidden tag:
+<workflow_manage_confirmed>ACTION:WORKFLOW_NAME</workflow_manage_confirmed>
+
+If the user says "no" or changes their mind, acknowledge it and move on.
 """
 
 # Tool definition for structured workflow extraction
@@ -192,7 +221,8 @@ def parse_ai_response(raw_content: str) -> dict:
     """Strip hidden signal tags from AI response and return flags.
 
     Returns dict with keys: clean_content, workflow_ready, workflow_confirmed,
-    action_request (str or None), action_confirmed.
+    action_request (str or None), action_confirmed,
+    workflow_manage (dict or None), workflow_manage_confirmed (dict or None).
     """
     workflow_ready = "<workflow_ready>true</workflow_ready>" in raw_content
     workflow_confirmed = "<workflow_confirmed>true</workflow_confirmed>" in raw_content
@@ -211,6 +241,23 @@ def parse_ai_response(raw_content: str) -> dict:
         val = confirmed_match.group(1)
         action_confirmed = val if val != "true" else True
 
+    # Extract workflow_manage (e.g., <workflow_manage>pause:New client welcome</workflow_manage>)
+    workflow_manage = None
+    manage_match = re.search(r"<workflow_manage>(pause|resume|delete):(.+?)</workflow_manage>", raw_content)
+    if manage_match:
+        workflow_manage = {"action": manage_match.group(1), "workflow_name": manage_match.group(2).strip()}
+
+    # Extract workflow_manage_confirmed
+    workflow_manage_confirmed = None
+    manage_confirmed_match = re.search(
+        r"<workflow_manage_confirmed>(pause|resume|delete):(.+?)</workflow_manage_confirmed>", raw_content
+    )
+    if manage_confirmed_match:
+        workflow_manage_confirmed = {
+            "action": manage_confirmed_match.group(1),
+            "workflow_name": manage_confirmed_match.group(2).strip(),
+        }
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
@@ -218,6 +265,10 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(confirmed_match.group(0), "")
     if action_match:
         clean = clean.replace(action_match.group(0), "")
+    if manage_match:
+        clean = clean.replace(manage_match.group(0), "")
+    if manage_confirmed_match:
+        clean = clean.replace(manage_confirmed_match.group(0), "")
     clean = clean.strip()
 
     return {
@@ -226,6 +277,8 @@ def parse_ai_response(raw_content: str) -> dict:
         "workflow_confirmed": workflow_confirmed,
         "action_request": action_request,
         "action_confirmed": action_confirmed,
+        "workflow_manage": workflow_manage,
+        "workflow_manage_confirmed": workflow_manage_confirmed,
     }
 
 
@@ -354,13 +407,50 @@ async def extract_action_from_conversation(
         return None
 
 
-async def get_ai_response(messages: List[Dict[str, str]], timezone: str = "UTC") -> str:
+def match_workflow_by_name(db_workflows: list, name_query: str) -> Optional[object]:
+    """Fuzzy-match a workflow by name. Returns the best match or None.
+
+    Tries exact match first, then case-insensitive contains, then word overlap.
+    """
+    query_lower = name_query.lower().strip()
+
+    # Exact match (case-insensitive)
+    for wf in db_workflows:
+        if wf.name.lower() == query_lower:
+            return wf
+
+    # Contains match
+    for wf in db_workflows:
+        if query_lower in wf.name.lower() or wf.name.lower() in query_lower:
+            return wf
+
+    # Word overlap — pick the workflow with the most overlapping words
+    query_words = set(query_lower.split())
+    best, best_score = None, 0
+    for wf in db_workflows:
+        wf_words = set(wf.name.lower().split())
+        overlap = len(query_words & wf_words)
+        if overlap > best_score:
+            best, best_score = wf, overlap
+    return best if best_score > 0 else None
+
+
+async def get_ai_response(
+    messages: List[Dict[str, str]],
+    timezone: str = "UTC",
+    workflow_names: Optional[List[str]] = None,
+) -> str:
     """Send messages to Claude and return the assistant's response."""
     from datetime import datetime, timezone as tz
 
     today = datetime.now(tz.utc).strftime("%A, %B %d, %Y")
     tz_info = _get_tz_info(timezone)
     system = SYSTEM_PROMPT + f"\n\nToday's date is {today}. The user's timezone is {tz_info}."
+
+    if workflow_names:
+        wf_list = ", ".join(f'"{n}"' for n in workflow_names)
+        system += f"\n\nThe owner currently has these saved processes: {wf_list}. " \
+                  "Use the exact name when referencing them in <workflow_manage> tags."
 
     response = await client.messages.create(
         model=CLAUDE_MODEL,
