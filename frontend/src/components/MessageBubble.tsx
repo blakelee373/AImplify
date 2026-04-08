@@ -130,7 +130,9 @@ function ActionRequestCard({
       <div className="text-sm font-medium text-blue-800">
         {info.icon} {info.label}
       </div>
-      {Object.entries(params).map(([key, value]) => (
+      {Object.entries(params)
+        .filter(([, value]) => value != null && String(value) !== "<UNKNOWN>" && String(value) !== "")
+        .map(([key, value]) => (
         <div key={key} className="text-xs text-blue-600">
           <span className="font-medium capitalize">{key.replace(/_/g, " ")}:</span>{" "}
           {String(value).length > 120 ? String(value).slice(0, 120) + "..." : String(value)}
