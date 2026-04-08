@@ -20,9 +20,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${jakarta.variable} h-full antialiased`}>
-      <body className="min-h-full flex">
+      <body className="h-full flex">
         <Sidebar />
-        <main className="flex-1 ml-64">{children}</main>
+        <main className="flex-1 ml-64 h-full">{children}</main>
       </body>
     </html>
   );
