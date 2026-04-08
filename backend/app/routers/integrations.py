@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 # Allow HTTP redirect URIs for local development
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# Allow scope to expand when include_granted_scopes merges prior grants
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from app.config import (
     GOOGLE_CLIENT_ID,
