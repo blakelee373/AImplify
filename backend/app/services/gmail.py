@@ -22,9 +22,9 @@ def send_email(
     Raises ValueError if Google is not connected.
     Raises Exception on Gmail API errors.
     """
-    creds = get_google_credentials(db)
+    creds = get_google_credentials(db, provider="gmail")
     if creds is None:
-        raise ValueError("Google account is not connected. Please connect it in Settings.")
+        raise ValueError("Gmail is not connected. Please connect it in Settings.")
 
     service = build("gmail", "v1", credentials=creds)
 
