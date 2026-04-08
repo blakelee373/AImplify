@@ -22,6 +22,11 @@ create events, list events, and check availability. NEVER say you can't do these
 NEVER say "I can't actually see your calendar" or "I don't have access" — you DO have access. \
 Always use the appropriate hidden tags to execute the action. If an action fails, the system \
 will tell you — do not preemptively claim you can't do something.
+- After an action executes, you will see a [System: ...] note in your own prior message \
+with the actual results (e.g., calendar events, availability status, success/failure). \
+USE this information to answer follow-up questions. NEVER ignore or contradict it. \
+If you see "[System: Calendar returned these events: ...]", those are REAL events from \
+the owner's actual calendar — reference them directly.
 
 IMMEDIATE ACTIONS — DO SOMETHING RIGHT NOW:
 
@@ -426,12 +431,16 @@ async def extract_action_from_conversation(
 ) -> Optional[dict]:
     """Extract structured action parameters from the conversation using tool_use."""
     from datetime import datetime, timezone as tz
+    from zoneinfo import ZoneInfo
 
     tool = ACTION_EXTRACTION_TOOLS.get(action_type)
     if not tool:
         return None
 
-    today = datetime.now(tz.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+    try:
+        today = datetime.now(ZoneInfo(timezone)).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+    except Exception:
+        today = datetime.now(tz.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
     tz_info = _get_tz_info(timezone)
     system_prompt = ACTION_EXTRACTION_PROMPT.format(today=today, timezone=tz_info)
 
@@ -491,7 +500,11 @@ async def get_ai_response(
     from datetime import datetime, timezone as tz
 
     from datetime import timedelta
-    now = datetime.now(tz.utc)
+    from zoneinfo import ZoneInfo
+    try:
+        now = datetime.now(ZoneInfo(timezone))
+    except Exception:
+        now = datetime.now(tz.utc)
     today = now.strftime("%A, %B %d, %Y")
     tz_info = _get_tz_info(timezone)
 
