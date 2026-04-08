@@ -240,9 +240,14 @@ ACTION_EXTRACTION_TOOLS = {
             "type": "object",
             "properties": {
                 "summary": {"type": "string", "description": "Event title"},
-                "start_time": {"type": "string", "description": "ISO 8601 start time"},
-                "end_time": {"type": "string", "description": "ISO 8601 end time"},
+                "start_time": {"type": "string", "description": "ISO 8601 start time with timezone offset (e.g. 2026-04-09T14:00:00-05:00)"},
+                "end_time": {"type": "string", "description": "ISO 8601 end time with timezone offset (e.g. 2026-04-09T14:42:00-05:00)"},
                 "description": {"type": "string", "description": "Event notes (optional)"},
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses of people to invite (optional)",
+                },
             },
             "required": ["summary", "start_time", "end_time"],
         },

@@ -42,7 +42,10 @@ def create_event(
     if attendees:
         event_body["attendees"] = [{"email": e} for e in attendees]
 
-    event = service.events().insert(calendarId="primary", body=event_body).execute()
+    send_updates = "all" if attendees else "none"
+    event = service.events().insert(
+        calendarId="primary", body=event_body, sendUpdates=send_updates
+    ).execute()
 
     return {
         "event_id": event["id"],

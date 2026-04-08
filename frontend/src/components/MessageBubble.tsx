@@ -116,6 +116,25 @@ const ACTION_LABELS: Record<string, { icon: string; label: string }> = {
   list_events: { icon: "📋", label: "List Events" },
 };
 
+function formatParamValue(key: string, value: unknown): string {
+  const str = String(value);
+  // Format ISO timestamps as readable dates
+  if ((key.includes("time") || key === "start" || key === "end") && /^\d{4}-\d{2}-\d{2}T/.test(str)) {
+    return new Date(str).toLocaleString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  // Format arrays (e.g., attendees)
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+  return str.length > 120 ? str.slice(0, 120) + "..." : str;
+}
+
 function ActionRequestCard({
   actionType,
   params,
@@ -135,7 +154,7 @@ function ActionRequestCard({
         .map(([key, value]) => (
         <div key={key} className="text-xs text-blue-600">
           <span className="font-medium capitalize">{key.replace(/_/g, " ")}:</span>{" "}
-          {String(value).length > 120 ? String(value).slice(0, 120) + "..." : String(value)}
+          {formatParamValue(key, value)}
         </div>
       ))}
     </div>
