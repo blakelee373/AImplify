@@ -28,9 +28,20 @@ treat it as an immediate action. Recognize requests like:
 - "What's on my calendar this week?" → list_events
 
 When you recognize an immediate action request:
-1. Summarize exactly what you'll do and confirm the details with the user. For example: \
-"I'll send a welcome email to jane@example.com with the subject 'Welcome!' — sound good?"
-2. At the very end of your message (after everything else), append this hidden tag on its own line:
+1. FIRST check if you have ALL the details needed to execute. If anything is missing, \
+ask ONE follow-up question to fill in the gap. Do NOT include any hidden tags yet. \
+For example:
+   - Email: you need recipient, subject, and body content. If they just say "send Jane an email," \
+ask what the email should say.
+   - Calendar event: you need title, date/time, AND duration or end time. If they say \
+"create an event for Friday at 2pm," ask "How long should it be — 30 minutes, an hour, \
+or something else?"
+   - Availability check: you need a time range. If they say "am I free tomorrow," ask \
+"What time range should I check — morning, afternoon, or a specific window?"
+2. Once you have ALL details, summarize exactly what you'll do and confirm with the user. \
+For example: "I'll create a 'Team Standup' event for tomorrow (April 9) from 2:00 PM to \
+2:30 PM — sound good?"
+3. At the very end of your message (after everything else), append this hidden tag on its own line:
 <action_request>ACTION_TYPE</action_request>
 Replace ACTION_TYPE with one of: send_email, create_event, check_availability, list_events
 
@@ -253,7 +264,13 @@ ACTION_EXTRACTION_TOOLS = {
 ACTION_EXTRACTION_PROMPT = """\
 You are a parameter extraction system. Analyze the conversation and extract the \
 exact parameters needed to execute the requested action. Use the provided tool to \
-output the result. Be precise — use the details the user provided.\
+output the result. Be precise — use the details the user provided.
+
+IMPORTANT: For dates and times, convert relative references (like "tomorrow", \
+"next Friday", "this afternoon") into full ISO 8601 timestamps using today's date \
+as reference. Today is {today}. Use the user's local timezone offset if mentioned, \
+otherwise use UTC. If a duration is given instead of an end time, calculate the end \
+time from the start time plus the duration.\
 """
 
 
@@ -261,15 +278,20 @@ async def extract_action_from_conversation(
     messages: List[Dict[str, str]], action_type: str
 ) -> Optional[dict]:
     """Extract structured action parameters from the conversation using tool_use."""
+    from datetime import datetime, timezone
+
     tool = ACTION_EXTRACTION_TOOLS.get(action_type)
     if not tool:
         return None
+
+    today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+    system_prompt = ACTION_EXTRACTION_PROMPT.format(today=today)
 
     try:
         response = await client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=1024,
-            system=ACTION_EXTRACTION_PROMPT,
+            system=system_prompt,
             messages=messages,
             tools=[tool],
             tool_choice={"type": "tool", "name": tool["name"]},
@@ -286,10 +308,15 @@ async def extract_action_from_conversation(
 
 async def get_ai_response(messages: List[Dict[str, str]]) -> str:
     """Send messages to Claude and return the assistant's response."""
+    from datetime import datetime, timezone
+
+    today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}."
+
     response = await client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
+        system=system,
         messages=messages,
     )
     return response.content[0].text
