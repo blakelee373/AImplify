@@ -260,17 +260,78 @@ function ActionResultBanner({
   details: Record<string, unknown>;
 }) {
   if (success) {
+    // List events — show each event
+    if (actionType === "list_events") {
+      const events = (details.events || []) as Array<Record<string, string>>;
+      if (events.length === 0) {
+        return (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium">
+            No upcoming events
+          </div>
+        );
+      }
+      return (
+        <div className="bg-green-50 border border-green-200 rounded-xl overflow-hidden">
+          <div className="bg-green-100 px-4 py-2.5 text-sm font-semibold text-green-900">
+            📋 {events.length} upcoming event{events.length !== 1 ? "s" : ""}
+          </div>
+          <div className="divide-y divide-green-200">
+            {events.map((event, i) => (
+              <div key={i} className="px-4 py-2.5 flex justify-between items-start gap-3">
+                <span className="text-sm font-medium text-green-800">{event.summary}</span>
+                <span className="text-xs text-green-600 whitespace-nowrap shrink-0">
+                  {event.start ? new Date(event.start).toLocaleString(undefined, {
+                    weekday: "short", month: "short", day: "numeric",
+                    hour: "numeric", minute: "2-digit",
+                  }) : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // Check availability — show conflicts if any
+    if (actionType === "check_availability") {
+      const result = details.result as Record<string, unknown> | undefined;
+      const available = result?.available ?? details.available;
+      const conflicts = (result?.conflicts || []) as Array<Record<string, string>>;
+      if (available) {
+        return (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium">
+            That time slot is available!
+          </div>
+        );
+      }
+      return (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
+          <div className="bg-amber-100 px-4 py-2.5 text-sm font-semibold text-amber-900">
+            ⚠️ {conflicts.length} conflict{conflicts.length !== 1 ? "s" : ""} found
+          </div>
+          <div className="divide-y divide-amber-200">
+            {conflicts.map((c, i) => (
+              <div key={i} className="px-4 py-2.5 text-sm text-amber-700">
+                {new Date(c.start).toLocaleString(undefined, {
+                  weekday: "short", month: "short", day: "numeric",
+                  hour: "numeric", minute: "2-digit",
+                })}
+                {" — "}
+                {new Date(c.end).toLocaleString(undefined, {
+                  hour: "numeric", minute: "2-digit",
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     let summary = "Done!";
     if (actionType === "send_email" && details.message_id) {
       summary = `Email sent successfully`;
     } else if (actionType === "create_event" && details.event_id) {
       summary = `Event created`;
-    } else if (actionType === "check_availability") {
-      const available = details.available;
-      summary = available ? "That time slot is available!" : "There are conflicts in that time slot";
-    } else if (actionType === "list_events") {
-      const count = details.count as number;
-      summary = count > 0 ? `Found ${count} upcoming event${count !== 1 ? "s" : ""}` : "No upcoming events";
     }
 
     return (
