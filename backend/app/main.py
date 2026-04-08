@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import FRONTEND_URL
 from app.database import init_db
-from app.routers import health, chat, workflows, integrations
+from app.routers import health, chat, workflows, integrations, actions
 
 
 @asynccontextmanager
@@ -34,3 +34,4 @@ app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(workflows.router)
 app.include_router(integrations.router)
+app.include_router(actions.router)

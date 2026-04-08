@@ -34,7 +34,10 @@ def get_google_credentials(db: Session) -> Optional[Credentials]:
     )
 
     # Refresh if expired
-    if integration.token_expiry and integration.token_expiry < datetime.now(timezone.utc):
+    # SQLite stores naive datetimes, so compare both as naive UTC
+    expiry = integration.token_expiry.replace(tzinfo=None) if integration.token_expiry else None
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if expiry and expiry < now_utc:
         if creds.refresh_token:
             creds.refresh(Request())
             # Update stored tokens with fresh ones
