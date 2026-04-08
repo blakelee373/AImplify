@@ -131,7 +131,7 @@ async def get_activity_logs(
             "description": log.description,
             "details": log.details,
             "workflow_id": log.workflow_id,
-            "created_at": log.created_at.isoformat(),
+            "created_at": log.created_at.isoformat() + "Z",
         }
         for log in logs
     ]
