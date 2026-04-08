@@ -1,3 +1,4 @@
+import os
 from typing import List
 
 import requests as http_requests
@@ -5,6 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from sqlalchemy.orm import Session
+
+# Allow HTTP redirect URIs for local development
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
 from app.config import (
     GOOGLE_CLIENT_ID,
@@ -36,6 +40,10 @@ GOOGLE_CLIENT_CONFIG = {
 }
 
 
+# Store the code verifier between connect and callback (single-user app)
+_pending_verifier: dict = {}
+
+
 def _make_flow() -> Flow:
     return Flow.from_client_config(
         GOOGLE_CLIENT_CONFIG,
@@ -48,19 +56,25 @@ def _make_flow() -> Flow:
 async def google_connect():
     """Redirect the user to Google's OAuth consent screen."""
     flow = _make_flow()
-    authorization_url, _ = flow.authorization_url(
+    authorization_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
+    # Persist the code verifier for the callback
+    _pending_verifier["code_verifier"] = flow.code_verifier
     return RedirectResponse(url=authorization_url)
 
 
 @router.get("/integrations/google/callback")
 async def google_callback(code: str, db: Session = Depends(get_db)):
     """Handle the OAuth callback — exchange code for tokens and store them."""
-    flow = _make_flow()
-    flow.fetch_token(code=code)
+    try:
+        flow = _make_flow()
+        flow.code_verifier = _pending_verifier.pop("code_verifier", None)
+        flow.fetch_token(code=code)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"OAuth token exchange failed: {e}")
 
     credentials = flow.credentials
 
