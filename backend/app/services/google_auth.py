@@ -12,13 +12,14 @@ from app.models.integration import Integration
 from app.services.encryption import encrypt_token, decrypt_token
 
 
-def get_google_credentials(db: Session) -> Optional[Credentials]:
-    """Get valid Google credentials, refreshing if expired.
+def get_google_credentials(db: Session, provider: str) -> Optional[Credentials]:
+    """Get valid Google credentials for a specific provider, refreshing if expired.
 
-    Returns None if no Google integration is connected.
+    provider: "gmail" or "google_calendar"
+    Returns None if no integration is connected for that provider.
     """
     integration = db.query(Integration).filter(
-        Integration.provider == "google",
+        Integration.provider == provider,
         Integration.status == "connected",
     ).first()
 
@@ -33,7 +34,6 @@ def get_google_credentials(db: Session) -> Optional[Credentials]:
         client_secret=GOOGLE_CLIENT_SECRET,
     )
 
-    # Refresh if expired
     # SQLite stores naive datetimes, so compare both as naive UTC
     expiry = integration.token_expiry.replace(tzinfo=None) if integration.token_expiry else None
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)

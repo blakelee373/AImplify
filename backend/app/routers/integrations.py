@@ -22,13 +22,20 @@ from app.services.encryption import encrypt_token, decrypt_token
 
 router = APIRouter(prefix="/api")
 
-# Scopes for Gmail and Calendar access
-GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-]
+# ── Scope definitions per provider ───────────────────────────────────────────
+
+PROVIDER_SCOPES = {
+    "gmail": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+    ],
+    "google_calendar": [
+        "https://www.googleapis.com/auth/calendar",
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+    ],
+}
 
 GOOGLE_CLIENT_CONFIG = {
     "web": {
@@ -39,39 +46,33 @@ GOOGLE_CLIENT_CONFIG = {
     }
 }
 
+# Store code verifiers between connect and callback (keyed by provider)
+_pending_verifiers: dict = {}
 
-# Store the code verifier between connect and callback (single-user app)
-_pending_verifier: dict = {}
 
-
-def _make_flow() -> Flow:
+def _make_flow(provider: str) -> Flow:
     return Flow.from_client_config(
         GOOGLE_CLIENT_CONFIG,
-        scopes=GOOGLE_SCOPES,
-        redirect_uri=f"{BACKEND_URL}/api/integrations/google/callback",
+        scopes=PROVIDER_SCOPES[provider],
+        redirect_uri=f"{BACKEND_URL}/api/integrations/{provider}/callback",
     )
 
 
-@router.get("/integrations/google/connect")
-async def google_connect():
-    """Redirect the user to Google's OAuth consent screen."""
-    flow = _make_flow()
+def _connect(provider: str):
+    flow = _make_flow(provider)
     authorization_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
-    # Persist the code verifier for the callback
-    _pending_verifier["code_verifier"] = flow.code_verifier
+    _pending_verifiers[provider] = flow.code_verifier
     return RedirectResponse(url=authorization_url)
 
 
-@router.get("/integrations/google/callback")
-async def google_callback(code: str, db: Session = Depends(get_db)):
-    """Handle the OAuth callback — exchange code for tokens and store them."""
+def _callback(provider: str, code: str, db: Session):
     try:
-        flow = _make_flow()
-        flow.code_verifier = _pending_verifier.pop("code_verifier", None)
+        flow = _make_flow(provider)
+        flow.code_verifier = _pending_verifiers.pop(provider, None)
         flow.fetch_token(code=code)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth token exchange failed: {e}")
@@ -83,21 +84,21 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
         encrypt_token(credentials.refresh_token) if credentials.refresh_token else None
     )
 
-    # Upsert integration row
-    integration = db.query(Integration).filter(Integration.provider == "google").first()
+    # Upsert integration row for this provider
+    integration = db.query(Integration).filter(Integration.provider == provider).first()
     if integration:
         integration.access_token = encrypted_access
         integration.refresh_token = encrypted_refresh or integration.refresh_token
         integration.token_expiry = credentials.expiry
-        integration.scopes = " ".join(credentials.scopes or GOOGLE_SCOPES)
+        integration.scopes = " ".join(credentials.scopes or PROVIDER_SCOPES[provider])
         integration.status = "connected"
     else:
         integration = Integration(
-            provider="google",
+            provider=provider,
             access_token=encrypted_access,
             refresh_token=encrypted_refresh,
             token_expiry=credentials.expiry,
-            scopes=" ".join(credentials.scopes or GOOGLE_SCOPES),
+            scopes=" ".join(credentials.scopes or PROVIDER_SCOPES[provider]),
             status="connected",
         )
         db.add(integration)
@@ -106,27 +107,10 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
     return RedirectResponse(url=f"{FRONTEND_URL}/settings/integrations?status=success")
 
 
-@router.get("/integrations/status")
-async def integrations_status(db: Session = Depends(get_db)):
-    """Return the status of all integrations. Never exposes tokens."""
-    integrations = db.query(Integration).all()
-    return [
-        {
-            "provider": i.provider,
-            "status": i.status,
-            "scopes": i.scopes.split(" ") if i.scopes else [],
-            "connected_at": i.updated_at.isoformat() if i.status == "connected" else None,
-        }
-        for i in integrations
-    ]
-
-
-@router.post("/integrations/google/disconnect")
-async def google_disconnect(db: Session = Depends(get_db)):
-    """Revoke the Google token and mark as disconnected."""
-    integration = db.query(Integration).filter(Integration.provider == "google").first()
+def _disconnect(provider: str, db: Session):
+    integration = db.query(Integration).filter(Integration.provider == provider).first()
     if not integration:
-        raise HTTPException(status_code=404, detail="Google integration not found")
+        raise HTTPException(status_code=404, detail=f"{provider} integration not found")
 
     # Best-effort revocation with Google
     if integration.access_token:
@@ -146,4 +130,64 @@ async def google_disconnect(db: Session = Depends(get_db)):
     integration.status = "disconnected"
     db.commit()
 
-    return {"status": "disconnected"}
+    return {"status": "disconnected", "provider": provider}
+
+
+# ── Gmail endpoints ──────────────────────────────────────────────────────────
+
+
+@router.get("/integrations/gmail/connect")
+async def gmail_connect():
+    """Redirect the user to Google's OAuth consent screen for Gmail."""
+    return _connect("gmail")
+
+
+@router.get("/integrations/gmail/callback")
+async def gmail_callback(code: str, db: Session = Depends(get_db)):
+    """Handle the Gmail OAuth callback."""
+    return _callback("gmail", code, db)
+
+
+@router.post("/integrations/gmail/disconnect")
+async def gmail_disconnect(db: Session = Depends(get_db)):
+    """Revoke Gmail token and mark as disconnected."""
+    return _disconnect("gmail", db)
+
+
+# ── Google Calendar endpoints ────────────────────────────────────────────────
+
+
+@router.get("/integrations/google_calendar/connect")
+async def calendar_connect():
+    """Redirect the user to Google's OAuth consent screen for Calendar."""
+    return _connect("google_calendar")
+
+
+@router.get("/integrations/google_calendar/callback")
+async def calendar_callback(code: str, db: Session = Depends(get_db)):
+    """Handle the Calendar OAuth callback."""
+    return _callback("google_calendar", code, db)
+
+
+@router.post("/integrations/google_calendar/disconnect")
+async def calendar_disconnect(db: Session = Depends(get_db)):
+    """Revoke Calendar token and mark as disconnected."""
+    return _disconnect("google_calendar", db)
+
+
+# ── Status ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/integrations/status")
+async def integrations_status(db: Session = Depends(get_db)):
+    """Return the status of all integrations. Never exposes tokens."""
+    integrations = db.query(Integration).all()
+    return [
+        {
+            "provider": i.provider,
+            "status": i.status,
+            "scopes": i.scopes.split(" ") if i.scopes else [],
+            "connected_at": i.updated_at.isoformat() if i.status == "connected" else None,
+        }
+        for i in integrations
+    ]

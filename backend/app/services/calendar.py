@@ -11,9 +11,9 @@ from app.services.google_auth import get_google_credentials
 
 def _get_calendar_service(db: Session):
     """Build a Google Calendar API client or raise if not connected."""
-    creds = get_google_credentials(db)
+    creds = get_google_credentials(db, provider="google_calendar")
     if creds is None:
-        raise ValueError("Google account is not connected. Please connect it in Settings.")
+        raise ValueError("Google Calendar is not connected. Please connect it in Settings.")
     return build("calendar", "v3", credentials=creds)
 
 

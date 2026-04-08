@@ -16,7 +16,7 @@ interface IntegrationStatus {
 function IntegrationsContent() {
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
   const [loading, setLoading] = useState(true);
-  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const justConnected = searchParams.get("status") === "success";
 
@@ -37,27 +37,22 @@ function IntegrationsContent() {
     }
   }
 
-  async function handleDisconnect() {
-    setDisconnecting(true);
+  async function handleDisconnect(provider: string) {
+    setDisconnecting(provider);
     try {
-      await api.post("/api/integrations/google/disconnect", {});
+      await api.post(`/api/integrations/${provider}/disconnect`, {});
       await fetchStatus();
     } catch {
       // Best effort
     } finally {
-      setDisconnecting(false);
+      setDisconnecting(null);
     }
   }
 
-  const google = integrations.find((i) => i.provider === "google");
-  const isConnected = google?.status === "connected";
-
-  const gmailConnected =
-    isConnected &&
-    google?.scopes?.includes("https://www.googleapis.com/auth/gmail.modify");
-  const calendarConnected =
-    isConnected &&
-    google?.scopes?.includes("https://www.googleapis.com/auth/calendar");
+  const gmail = integrations.find((i) => i.provider === "gmail");
+  const calendar = integrations.find((i) => i.provider === "google_calendar");
+  const gmailConnected = gmail?.status === "connected";
+  const calendarConnected = calendar?.status === "connected";
 
   return (
     <div className="p-6 max-w-2xl">
@@ -70,7 +65,7 @@ function IntegrationsContent() {
 
       {justConnected && (
         <div className="mt-4 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-700">
-          Google account connected successfully!
+          Account connected successfully!
         </div>
       )}
 
@@ -104,15 +99,15 @@ function IntegrationsContent() {
           <div className="mt-4">
             {gmailConnected ? (
               <button
-                onClick={handleDisconnect}
-                disabled={disconnecting}
+                onClick={() => handleDisconnect("gmail")}
+                disabled={disconnecting === "gmail"}
                 className="px-4 py-2 text-sm rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
               >
-                {disconnecting ? "Disconnecting..." : "Disconnect"}
+                {disconnecting === "gmail" ? "Disconnecting..." : "Disconnect"}
               </button>
             ) : (
               <a
-                href={`${API_URL}/api/integrations/google/connect`}
+                href={`${API_URL}/api/integrations/gmail/connect`}
                 className="inline-flex items-center px-4 py-2 text-sm rounded-lg bg-primary text-white font-semibold hover:bg-primary-hover transition-colors"
               >
                 Connect Gmail
@@ -150,15 +145,17 @@ function IntegrationsContent() {
           <div className="mt-4">
             {calendarConnected ? (
               <button
-                onClick={handleDisconnect}
-                disabled={disconnecting}
+                onClick={() => handleDisconnect("google_calendar")}
+                disabled={disconnecting === "google_calendar"}
                 className="px-4 py-2 text-sm rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
               >
-                {disconnecting ? "Disconnecting..." : "Disconnect"}
+                {disconnecting === "google_calendar"
+                  ? "Disconnecting..."
+                  : "Disconnect"}
               </button>
             ) : (
               <a
-                href={`${API_URL}/api/integrations/google/connect`}
+                href={`${API_URL}/api/integrations/google_calendar/connect`}
                 className="inline-flex items-center px-4 py-2 text-sm rounded-lg bg-primary text-white font-semibold hover:bg-primary-hover transition-colors"
               >
                 Connect Google Calendar
