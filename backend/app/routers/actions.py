@@ -109,6 +109,34 @@ async def action_create_event(
     return result
 
 
+# ── Activity Log ─────────────────────────────────────────────────────────────
+
+
+@router.get("/activity-logs")
+async def get_activity_logs(
+    limit: int = Query(default=20, le=100),
+    db: Session = Depends(get_db),
+):
+    """Return recent activity logs, newest first."""
+    logs = (
+        db.query(ActivityLog)
+        .order_by(ActivityLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": log.id,
+            "action_type": log.action_type,
+            "description": log.description,
+            "details": log.details,
+            "workflow_id": log.workflow_id,
+            "created_at": log.created_at.isoformat(),
+        }
+        for log in logs
+    ]
+
+
 @router.get("/actions/upcoming-events")
 async def action_upcoming_events(
     max_results: int = Query(default=10, le=50),

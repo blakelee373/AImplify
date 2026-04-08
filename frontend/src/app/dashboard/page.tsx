@@ -70,6 +70,15 @@ interface ExecuteResult {
   results: StepResult[];
 }
 
+interface ActivityLogEntry {
+  id: number;
+  action_type: string;
+  description: string;
+  details: Record<string, unknown> | null;
+  workflow_id: number | null;
+  created_at: string;
+}
+
 type ActionResult = { type: "success" | "error"; message: string } | null;
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
@@ -82,6 +91,23 @@ function toLocalDatetimeValue(d: Date): string {
 function localToISO(local: string): string {
   return new Date(local).toISOString();
 }
+
+function timeAgo(iso: string): string {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+const ACTION_ICONS: Record<string, string> = {
+  send_email: "✉",
+  create_event: "📅",
+  check_calendar: "🔍",
+};
 
 function formatEventTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -127,6 +153,10 @@ export default function DashboardPage() {
   const [execResults, setExecResults] = useState<Record<number, ExecuteResult | null>>({});
   const [execErrors, setExecErrors] = useState<Record<number, string | null>>({});
 
+  /* Activity log state */
+  const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+
   /* Email state */
   const [recipient, setRecipient] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
@@ -157,6 +187,7 @@ export default function DashboardPage() {
   /* Load data on mount */
   useEffect(() => {
     fetchWorkflows();
+    fetchActivityLogs();
     fetchUpcoming();
   }, []);
 
@@ -171,6 +202,18 @@ export default function DashboardPage() {
       setWorkflows([]);
     } finally {
       setLoadingWorkflows(false);
+    }
+  }
+
+  async function fetchActivityLogs() {
+    setLoadingLogs(true);
+    try {
+      const data = await api.get<ActivityLogEntry[]>("/api/activity-logs?limit=20");
+      setActivityLogs(data);
+    } catch {
+      setActivityLogs([]);
+    } finally {
+      setLoadingLogs(false);
     }
   }
 
@@ -398,6 +441,35 @@ export default function DashboardPage() {
                   ))}
                 </div>
               )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── Recent Activity ────────────────────────────────────────────── */}
+      <section className="rounded-lg border border-stone-200 bg-white p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-stone-900">Recent Activity</h2>
+            <p className="text-sm text-stone-500 mt-1">What the system has been doing.</p>
+          </div>
+          <button onClick={fetchActivityLogs} disabled={loadingLogs} className="text-sm text-primary hover:text-primary-hover font-medium">
+            {loadingLogs ? "Loading..." : "Refresh"}
+          </button>
+        </div>
+        <div className="mt-4 space-y-3">
+          {activityLogs.length === 0 && !loadingLogs && (
+            <p className="text-sm text-stone-400">No activity yet. Send an email or run a workflow to see it here.</p>
+          )}
+          {activityLogs.map((log) => (
+            <div key={log.id} className="flex items-start gap-3 rounded-lg bg-stone-50 px-4 py-3">
+              <span className="text-lg shrink-0 mt-0.5">
+                {ACTION_ICONS[log.action_type] || "⚡"}
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-stone-900">{log.description}</p>
+                <p className="text-xs text-stone-400 mt-0.5">{timeAgo(log.created_at)}</p>
+              </div>
             </div>
           ))}
         </div>
