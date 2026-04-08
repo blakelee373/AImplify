@@ -727,7 +727,9 @@ function WorkflowRunResultCard({
 }
 
 function formatTimeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
+  // Backend stores UTC but SQLite drops timezone info — treat bare timestamps as UTC
+  const utcIso = iso.includes("Z") || iso.includes("+") || /\d{2}:\d{2}$/.test(iso) ? iso : iso + "Z";
+  const diff = Date.now() - new Date(utcIso).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
