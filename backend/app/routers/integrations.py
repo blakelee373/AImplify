@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 from typing import List
 
 import requests as http_requests
@@ -46,8 +48,25 @@ GOOGLE_CLIENT_CONFIG = {
     }
 }
 
-# Store code verifiers between connect and callback (keyed by provider)
-_pending_verifiers: dict = {}
+# Persist code verifiers to disk so they survive uvicorn reloads
+_VERIFIER_FILE = Path(__file__).resolve().parent.parent.parent / ".oauth_verifiers.json"
+
+
+def _save_verifier(provider: str, verifier: str):
+    data = {}
+    if _VERIFIER_FILE.exists():
+        data = json.loads(_VERIFIER_FILE.read_text())
+    data[provider] = verifier
+    _VERIFIER_FILE.write_text(json.dumps(data))
+
+
+def _pop_verifier(provider: str):
+    if not _VERIFIER_FILE.exists():
+        return None
+    data = json.loads(_VERIFIER_FILE.read_text())
+    verifier = data.pop(provider, None)
+    _VERIFIER_FILE.write_text(json.dumps(data))
+    return verifier
 
 
 def _make_flow(provider: str) -> Flow:
@@ -65,14 +84,14 @@ def _connect(provider: str):
         include_granted_scopes="true",
         prompt="consent",
     )
-    _pending_verifiers[provider] = flow.code_verifier
+    _save_verifier(provider, flow.code_verifier)
     return RedirectResponse(url=authorization_url)
 
 
 def _callback(provider: str, code: str, db: Session):
     try:
         flow = _make_flow(provider)
-        flow.code_verifier = _pending_verifiers.pop(provider, None)
+        flow.code_verifier = _pop_verifier(provider)
         flow.fetch_token(code=code)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth token exchange failed: {e}")

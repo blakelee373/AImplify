@@ -21,7 +21,7 @@ from app.services.ai_engine import (
 )
 from app.services.workflow_engine import create_workflow_from_draft
 from app.services.gmail import send_email
-from app.services.calendar import create_event, check_availability, list_upcoming_events
+from app.services.calendar import create_event, update_event, check_availability, list_upcoming_events
 
 router = APIRouter(prefix="/api")
 
@@ -98,7 +98,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             )
             if fresh_params:
                 action_meta = {**action_meta, "action_params": fresh_params}
-            result = await _execute_chat_action(db, action_meta)
+            result = await _execute_chat_action(db, action_meta, conversation_id=conversation.id)
             metadata = {
                 "message_type": "action_result",
                 "action_type": action_type,
@@ -156,7 +156,24 @@ def _find_latest_action_request(db: Session, conversation_id: int) -> Optional[d
     return None
 
 
-async def _execute_chat_action(db: Session, action_meta: dict) -> dict:
+def _find_latest_event_id(db: Session, conversation_id: int) -> Optional[str]:
+    """Find the most recent event_id from an action_result in this conversation."""
+    msgs = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).all()
+
+    for msg in msgs:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "action_result":
+                details = msg.metadata_json.get("details", {})
+                event_id = details.get("event_id")
+                if event_id:
+                    return event_id
+    return None
+
+
+async def _execute_chat_action(db: Session, action_meta: dict, conversation_id: Optional[int] = None) -> dict:
     """Execute an action from chat and log it to the activity log."""
     action_type = action_meta["action_type"]
     params = action_meta.get("action_params", {})
@@ -191,6 +208,27 @@ async def _execute_chat_action(db: Session, action_meta: dict) -> dict:
                 "end": params["end_time"],
                 "event_id": result.get("event_id"),
                 "attendees": attendees,
+                "source": "chat",
+            }
+
+        elif action_type == "update_event":
+            event_id = _find_latest_event_id(db, conversation_id) if conversation_id else None
+            if not event_id:
+                return {"status": "error", "details": {"error": "No recent event found to update"}}
+            result = update_event(
+                db,
+                event_id=event_id,
+                add_attendees=params.get("add_attendees"),
+                summary=params.get("summary"),
+            )
+            add_list = params.get("add_attendees", [])
+            description = f"Updated calendar event: {result.get('summary')}"
+            if add_list:
+                description += f" (added: {', '.join(add_list)})"
+            details = {
+                "event_id": event_id,
+                "summary": result.get("summary"),
+                "attendees_added": add_list,
                 "source": "chat",
             }
 
