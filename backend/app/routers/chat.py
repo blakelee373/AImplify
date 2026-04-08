@@ -88,17 +88,28 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         }
 
     if signals["action_confirmed"]:
-        # Find the most recent action request and re-extract params from the full
-        # conversation (the user may have added details like attendees during confirmation)
+        # Determine action type: from the confirmed tag, from a prior action_request, or None
+        confirmed_val = signals["action_confirmed"]
         action_meta = _find_latest_action_request(db, conversation.id)
-        if action_meta:
+
+        if isinstance(confirmed_val, str):
+            # Claude included the action type in <action_confirmed>send_email</action_confirmed>
+            action_type = confirmed_val
+        elif action_meta:
             action_type = action_meta["action_type"]
+        else:
+            action_type = None
+
+        if action_type:
+            # Re-extract params from the full conversation (captures any additions)
             fresh_params = await extract_action_from_conversation(
                 messages, action_type, timezone=tz
             )
-            if fresh_params:
-                action_meta = {**action_meta, "action_params": fresh_params}
-            result = await _execute_chat_action(db, action_meta, conversation_id=conversation.id)
+            exec_meta = {
+                "action_type": action_type,
+                "action_params": fresh_params or (action_meta or {}).get("action_params", {}),
+            }
+            result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
             metadata = {
                 "message_type": "action_result",
                 "action_type": action_type,
