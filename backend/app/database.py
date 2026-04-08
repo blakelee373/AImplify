@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 from app.config import DATABASE_URL
@@ -20,7 +20,21 @@ def get_db():
         db.close()
 
 
+_MIGRATIONS = [
+    "ALTER TABLE workflows ADD COLUMN conversation_id INTEGER REFERENCES conversations(id)",
+]
+
+
 def init_db():
-    """Create all tables if they don't exist."""
-    from app.models import user, business, conversation, workflow, activity_log  # noqa: F401
+    """Create all tables if they don't exist, then run migrations."""
+    from app.models import user, business, conversation, workflow, activity_log, integration  # noqa: F401
     Base.metadata.create_all(bind=engine)
+
+    # Run pending migrations (skip if column already exists)
+    with engine.connect() as conn:
+        for sql in _MIGRATIONS:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                conn.rollback()

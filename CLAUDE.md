@@ -24,3 +24,8 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - Type a message in the chat and get an AI response back
 - Switch between conversations using the sidebar
 - Pause a workflow from the dashboard with one click
+
+### How to test it:
+- Step-by-step instructions the user can follow on the Vercel preview to verify each new feature works
+- Be specific: what to click, what to type, what they should see happen
+- Example: "Go to /chat, type 'I want to automate reminders', you should see the AI ask a follow-up question with choices"

@@ -7,6 +7,7 @@ const navItems = [
   { href: "/", label: "Home", icon: "🏠" },
   { href: "/chat", label: "Chat", icon: "💬" },
   { href: "/dashboard", label: "Dashboard", icon: "📊" },
+  { href: "/settings/integrations", label: "Settings", icon: "⚙️" },
 ];
 
 export function Sidebar() {
@@ -23,7 +24,10 @@ export function Sidebar() {
 
       <nav className="flex-1 px-3 py-4 space-y-1">
         {navItems.map((item) => {
-          const isActive = pathname === item.href;
+          const isActive =
+            item.href === "/"
+              ? pathname === "/"
+              : pathname.startsWith(item.href);
           return (
             <Link
               key={item.href}

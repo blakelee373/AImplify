@@ -4,3 +4,6 @@ sqlalchemy
 anthropic
 python-dotenv
 pydantic
+cryptography
+google-auth-oauthlib
+google-api-python-client

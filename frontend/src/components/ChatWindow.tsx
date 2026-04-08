@@ -4,10 +4,27 @@ import { useState, useRef, useEffect } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { api } from "@/lib/api";
 
+interface MessageMetadata {
+  message_type?: string;
+  workflow_draft?: {
+    name: string;
+    description: string;
+    trigger_type: string;
+    trigger_config: Record<string, string>;
+    steps: Array<{
+      step_order: number;
+      action_type: string;
+      description: string;
+    }>;
+  };
+  workflow_id?: number;
+}
+
 interface Message {
   id: number;
   role: "user" | "assistant";
   content: string;
+  metadata?: MessageMetadata | null;
 }
 
 interface ChatResponse {
@@ -68,7 +85,12 @@ export function ChatWindow() {
           </div>
         )}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} role={msg.role} content={msg.content} />
+          <MessageBubble
+            key={msg.id}
+            role={msg.role}
+            content={msg.content}
+            metadata={msg.metadata}
+          />
         ))}
         {loading && (
           <div className="flex justify-start">
