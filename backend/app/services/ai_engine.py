@@ -483,9 +483,20 @@ async def get_ai_response(
     """Send messages to Claude and return the assistant's response."""
     from datetime import datetime, timezone as tz
 
-    today = datetime.now(tz.utc).strftime("%A, %B %d, %Y")
+    from datetime import timedelta
+    now = datetime.now(tz.utc)
+    today = now.strftime("%A, %B %d, %Y")
     tz_info = _get_tz_info(timezone)
-    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}. The user's timezone is {tz_info}."
+
+    # Build a 7-day reference so the AI doesn't have to do date math
+    day_lines = []
+    for i in range(7):
+        d = now + timedelta(days=i)
+        label = "Today" if i == 0 else "Tomorrow" if i == 1 else d.strftime("%A")
+        day_lines.append(f"- {label}: {d.strftime('%A, %B %d, %Y')}")
+    week_ref = "\n".join(day_lines)
+
+    system = SYSTEM_PROMPT + f"\n\nToday's date is {today}. The user's timezone is {tz_info}.\n\nUpcoming days for reference:\n{week_ref}"
 
     if workflow_names:
         wf_list = ", ".join(f'"{n}"' for n in workflow_names)
