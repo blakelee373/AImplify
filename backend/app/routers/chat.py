@@ -77,13 +77,15 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             workflow = create_workflow_from_draft(db, draft, conversation.id)
             metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
 
-    if signals["action_request"]:
+    # Detect action request — from tag or from response content as fallback
+    action_request_type = signals["action_request"] or _detect_action_from_content(clean_content)
+
+    if action_request_type:
         # Extract structured action parameters via a second Claude call
-        action_type = signals["action_request"]
-        params = await extract_action_from_conversation(messages, action_type, timezone=tz)
+        params = await extract_action_from_conversation(messages, action_request_type, timezone=tz)
         metadata = {
             "message_type": "action_request",
-            "action_type": action_type,
+            "action_type": action_request_type,
             "action_params": params or {},
         }
 
@@ -137,6 +139,39 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         conversation_id=conversation.id,
         message=MessageResponse.model_validate(assistant_message),
     )
+
+
+import re as _re
+
+
+def _detect_action_from_content(content: str) -> Optional[str]:
+    """Fallback: detect if the AI response is asking for confirmation of an action.
+
+    Returns the action type if detected, None otherwise.
+    """
+    lower = content.lower()
+
+    # Must end with a confirmation question
+    confirmation_phrases = [
+        "sound good", "want me to", "shall i", "go ahead",
+        "ready to", "look right", "look correct", "that right",
+        "does that work", "want me to go", "should i",
+    ]
+    has_confirmation = any(phrase in lower for phrase in confirmation_phrases)
+    if not has_confirmation:
+        return None
+
+    # Detect action type from keywords
+    if _re.search(r"\bemail\b|\bsend\b.*\bto\b.*@", lower):
+        return "send_email"
+    if _re.search(r"\bevent\b|\bcalendar\b|\bmeeting\b|\bappointment\b", lower):
+        return "create_event"
+    if _re.search(r"\bavailab|\bfree\b|\bbusy\b|\bopen\b.*\bslot", lower):
+        return "check_availability"
+    if _re.search(r"\badd\b.*\b(attend|invite)\b|\binvite\b.*\bto\b", lower):
+        return "update_event"
+
+    return None
 
 
 def _find_latest_draft(db: Session, conversation_id: int) -> Optional[dict]:
