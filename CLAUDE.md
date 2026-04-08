@@ -9,8 +9,20 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - **AI:** Anthropic Claude API
 - **Deployment:** Vercel (frontend), Cloudflare tunnel (backend during dev)
 
+## Architecture Notes
+- Chat page uses a side-by-side layout: ConversationList (w-72) | ChatWindow (flex-1)
+- ChatWindow is a controlled component — parent passes `conversationId` prop and receives `onConversationCreated` callback
+- Layout height chain: html (h-full) → body (h-full flex) → main (flex-1 h-full) → page content
+- Backend conversation endpoints: POST /api/chat, GET /api/conversations, GET /api/conversations/{id}, DELETE /api/conversations/{id}
+- DELETE /api/conversations/{id} nulls out Workflow.conversation_id FK before cascade-deleting messages
+
 ## Python Compatibility
 - Target Python 3.9 — use `Optional[str]` not `str | None`, `List[str]` not `list[str]`, `timezone.utc` not `datetime.UTC`
+
+## UI Patterns
+- Never use absolute-positioned overlays on top of interactive elements (buttons) for confirmation UIs — use conditional rendering to swap the entire row content instead
+- Conversation sidebar uses `refreshKey` prop to trigger re-fetch after new conversations are created
+- Design tokens: dark sidebar (#1c1917), amber primary (#f59e0b), stone neutrals
 
 ## Phase Response Requirements
 - At the end of EVERY phase response, provide TWO bullet-pointed lists in layman's terms:
