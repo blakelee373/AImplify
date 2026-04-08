@@ -385,25 +385,32 @@ import re as _re
 
 
 def _detect_action_gathering(content: str) -> Optional[str]:
-    """Detect if the AI is gathering fields for an action (pre-confirmation stage).
+    """Detect if the AI is engaging with an action request instead of suggesting connection.
 
-    Catches cases like 'What should the subject line be?' or 'When should the event be?'
-    when the AI is proceeding with an action instead of suggesting a tool connection.
+    Catches any response where the AI is proceeding with an email or calendar task
+    (gathering fields, offering choices, disambiguating) without suggesting a tool connection.
     """
     lower = content.lower()
-    # Must contain a question — the AI is asking for a missing field
+    # Must contain a question — the AI is asking the user something
     if "?" not in lower:
         return None
-    # Email field gathering: mentions email/send AND asks about parameters
-    email_signals = ["subject", "body", "email say", "email should", "send that email",
-                     "send an email", "send the email", "draft", "write the email"]
+    # Email: any response that engages with sending email
+    email_signals = [
+        "subject", "body", "email say", "email should", "send that email",
+        "send an email", "send the email", "draft", "write the email",
+        "who should i", "who do you want", "recipient", "send it to",
+    ]
     if any(s in lower for s in email_signals):
         return "send_email"
-    # Calendar field gathering: mentions event/meeting AND asks about parameters
-    cal_signals = ["event", "meeting", "appointment", "schedule", "put on your calendar",
-                   "add to your calendar", "block off", "what time", "how long should"]
+    # Calendar: any response that engages with calendar/scheduling
+    cal_signals = [
+        "event", "meeting", "appointment", "schedule", "put on your calendar",
+        "add to your calendar", "block off", "what time", "how long should",
+        "your calendar", "time slot", "availability", "available",
+        "what's on", "show you", "check if", "free", "busy",
+    ]
     if any(s in lower for s in cal_signals):
-        return "create_event"
+        return "check_availability"
     return None
 
 
