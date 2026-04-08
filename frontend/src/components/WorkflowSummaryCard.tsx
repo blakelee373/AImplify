@@ -1,3 +1,5 @@
+import { getTriggerLabel } from "@/lib/workflow-utils";
+
 interface WorkflowDraft {
   name: string;
   description: string;
@@ -14,25 +16,6 @@ interface WorkflowSummaryCardProps {
   draft: WorkflowDraft;
 }
 
-function getTriggerLabel(draft: WorkflowDraft): string {
-  const config = draft.trigger_config;
-  if (config.event_type) {
-    const labels: Record<string, string> = {
-      new_booking: "When a new booking comes in",
-      email_received: "When an email arrives",
-      cancellation: "When a booking is cancelled",
-    };
-    return labels[config.event_type] || `When: ${config.event_type}`;
-  }
-  if (config.schedule) {
-    return config.schedule;
-  }
-  if (config.frequency) {
-    return `Runs ${config.frequency}`;
-  }
-  return "Manual";
-}
-
 export function WorkflowSummaryCard({ draft }: WorkflowSummaryCardProps) {
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
@@ -42,7 +25,7 @@ export function WorkflowSummaryCard({ draft }: WorkflowSummaryCardProps) {
       </div>
 
       <div className="text-xs text-amber-700 font-medium bg-amber-100 rounded-md px-2.5 py-1 inline-block">
-        {getTriggerLabel(draft)}
+        {getTriggerLabel(draft.trigger_type, draft.trigger_config)}
       </div>
 
       <ol className="space-y-2">
