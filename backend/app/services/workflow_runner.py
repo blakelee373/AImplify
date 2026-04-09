@@ -25,6 +25,24 @@ async def run_workflow(
         if wf_tz:
             context["timezone"] = wf_tz
 
+    # Ensure owner_email is in context so "send to myself" resolves correctly
+    if "owner_email" not in context:
+        try:
+            from app.services.google_auth import get_google_credentials
+            from googleapiclient.discovery import build as goog_build
+
+            creds = get_google_credentials(db, provider="gmail")
+            if creds:
+                service = goog_build("gmail", "v1", credentials=creds)
+                profile = service.users().getProfile(userId="me").execute()
+                email = profile.get("emailAddress")
+                if email:
+                    context["owner_email"] = email
+                    if "client_email" not in context:
+                        context["client_email"] = email
+        except Exception:
+            pass
+
     results = []
 
     for step in workflow.steps:
