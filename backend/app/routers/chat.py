@@ -998,13 +998,30 @@ def _detect_action_from_content(content: str) -> Optional[str]:
     """
     lower = content.lower()
 
-    # Must end with a confirmation question
+    # If the response ends with a question gathering information (what, who,
+    # which, where, how), it's still collecting fields — NOT confirming.
+    # Only the LAST sentence matters; confirmation phrases earlier in the
+    # response (e.g., recapping "you want me to...") are not confirmation.
+    last_sentence = lower.rsplit(".", 1)[-1].strip()
+    if not last_sentence:
+        last_sentence = lower
+    info_gathering = _re.search(
+        r"\b(what('?s)?|who|which|where|how much|how many|what address|what email)\b",
+        last_sentence,
+    )
+    if info_gathering and last_sentence.rstrip().endswith("?"):
+        return None
+
+    # Must contain a confirmation question
+    # Check only the tail end of the response (last ~200 chars) to avoid
+    # matching recap phrases like "you mentioned you want me to..."
+    tail = lower[-200:] if len(lower) > 200 else lower
     confirmation_phrases = [
         "sound good", "want me to", "shall i", "go ahead",
         "ready to", "look right", "look correct", "that right",
         "does that work", "want me to go", "should i",
     ]
-    has_confirmation = any(phrase in lower for phrase in confirmation_phrases)
+    has_confirmation = any(phrase in tail for phrase in confirmation_phrases)
     if not has_confirmation:
         return None
 
