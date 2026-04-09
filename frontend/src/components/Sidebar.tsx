@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, MessageSquare, LayoutDashboard, Zap, Settings, type LucideIcon } from "lucide-react";
+import { Home, MessageSquare, LayoutDashboard, Zap, Brain, Settings, type LucideIcon } from "lucide-react";
 
 interface NavItem {
   href: string;
@@ -16,6 +16,7 @@ const navItems: NavItem[] = [
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/workflows", label: "Workflows", icon: Zap },
+  { href: "/settings/memory", label: "Memory", icon: Brain },
   { href: "/settings/integrations", label: "Settings", icon: Settings },
 ];
 

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import FRONTEND_URL
 from app.database import init_db
-from app.routers import health, chat, workflows, integrations, actions
+from app.routers import health, chat, workflows, integrations, actions, memory
 from app.services.scheduler import scheduler_loop
 from app.services.email_watcher import email_watcher_loop
 from app.services.calendar_watcher import calendar_watcher_loop
@@ -50,3 +50,4 @@ app.include_router(chat.router)
 app.include_router(workflows.router)
 app.include_router(integrations.router)
 app.include_router(actions.router)
+app.include_router(memory.router)

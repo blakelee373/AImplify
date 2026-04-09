@@ -428,6 +428,30 @@ IMPORTANT: Only use <connect_tool> for tools that are NOT currently connected. \
 Only use <disconnect_tool> and <disconnect_confirmed> for tools that ARE currently connected. \
 Check the connection status information provided above. If a tool is already connected and \
 the owner asks to connect it, just let them know it's already set up.
+
+BUSINESS MEMORY — REMEMBER IMPORTANT DETAILS:
+
+During conversation, if the owner shares important business information that should be \
+remembered across conversations (like business hours, pricing, preferred tone, VIP clients, \
+common procedures), you can suggest saving it to business memory.
+
+When you identify something worth remembering:
+1. Briefly note what you'd like to save: "That's useful — I can remember that your business \
+hours are 9am-5pm EST so I always have it. Want me to save that?"
+2. At the very end of your message, append this hidden tag:
+<memory_save>CATEGORY:KEY:VALUE</memory_save>
+Example: <memory_save>hours:Business hours:9am-5pm EST, Monday through Friday</memory_save>
+Example: <memory_save>preferences:Communication tone:Owner prefers formal, professional tone</memory_save>
+Example: <memory_save>clients:VIP clients:Jane Smith, Mike Johnson</memory_save>
+
+Categories to use: hours, preferences, clients, services, pricing, policies, general
+
+IMPORTANT: NEVER save to memory without asking the owner first. The tag triggers a \
+confirmation card — the owner must approve before anything is stored. Only suggest saving \
+things that are genuinely reusable across conversations, not one-time details.
+
+If the "MEMORY CONTEXT" section below contains saved business memories, use that knowledge \
+naturally in your responses. You don't need to re-save things that are already in memory.
 """
 
 # Tool definition for structured workflow extraction
@@ -691,6 +715,19 @@ def parse_ai_response(raw_content: str) -> dict:
     if workflow_edit_confirmed_match:
         workflow_edit_confirmed = workflow_edit_confirmed_match.group(1).strip()
 
+    # Extract memory_save (e.g., <memory_save>hours:Business hours:9am-5pm EST</memory_save>)
+    memory_save = None
+    memory_save_match = re.search(r"<memory_save>([^:]+):([^:]+):(.+?)</memory_save>", raw_content)
+    if memory_save_match:
+        memory_save = {
+            "category": memory_save_match.group(1).strip(),
+            "key": memory_save_match.group(2).strip(),
+            "value": memory_save_match.group(3).strip(),
+        }
+
+    # Extract memory_save_confirmed
+    memory_save_confirmed = "<memory_save_confirmed>true</memory_save_confirmed>" in raw_content
+
     # Extract choices (e.g., <choices>Option A|Option B|Option C</choices>)
     choices = None
     choices_match = re.search(r"<choices>(.+?)</choices>", raw_content)
@@ -735,6 +772,9 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(workflow_edit_confirmed_match.group(0), "")
     if choices_match:
         clean = clean.replace(choices_match.group(0), "")
+    if memory_save_match:
+        clean = clean.replace(memory_save_match.group(0), "")
+    clean = clean.replace("<memory_save_confirmed>true</memory_save_confirmed>", "")
     # Strip any [System: ...] text the AI may echo from its history
     clean = re.sub(r"\[System:.*?\]", "", clean)
     clean = clean.strip()
@@ -760,6 +800,8 @@ def parse_ai_response(raw_content: str) -> dict:
         "workflow_edit": workflow_edit,
         "workflow_edit_confirmed": workflow_edit_confirmed,
         "choices": choices,
+        "memory_save": memory_save,
+        "memory_save_confirmed": memory_save_confirmed,
     }
 
 
@@ -1255,11 +1297,62 @@ def _build_connection_status(connected_providers: Optional[List[str]] = None) ->
     return "\n".join(parts)
 
 
+def _build_memory_context(
+    business_memories: Optional[List[dict]] = None,
+    session_context: Optional[dict] = None,
+) -> str:
+    """Build labeled memory context for injection into the system prompt."""
+    parts = []
+
+    if business_memories:
+        total = len(business_memories)
+        capped = business_memories[:20]
+        lines = []
+        for mem in capped:
+            val = mem["value"]
+            if len(val) > 200:
+                val = val[:197] + "..."
+            lines.append(f"- [{mem['category']}] {mem['key']}: {val}")
+        section = "=== SAVED BUSINESS MEMORY (Tier 3 — persistent, owner-editable) ===\n" + "\n".join(lines)
+        if total > 20:
+            section += f"\n(Showing 20 most recent of {total} total memories)"
+        parts.append(section)
+
+    if session_context:
+        lines = []
+        if session_context.get("task"):
+            lines.append(f"- Current task: {session_context['task']}")
+        for pref in session_context.get("preferences", []):
+            lines.append(f"- Preference: {pref}")
+        skip_keys = {"task", "preferences"}
+        for k, v in session_context.items():
+            if k not in skip_keys:
+                lines.append(f"- {k}: {v}")
+        if lines:
+            parts.append(
+                "=== SESSION CONTEXT (Tier 2 — this conversation only) ===\n"
+                + "\n".join(lines)
+            )
+
+    if not parts:
+        return ""
+
+    return (
+        "\n\n--- MEMORY CONTEXT ---\n"
+        "Tier 2 (session) = persists across turns in this conversation.\n"
+        "Tier 3 (saved) = permanent business knowledge, owner can edit/delete via Settings > Memory.\n\n"
+        + "\n\n".join(parts)
+        + "\n--- END MEMORY CONTEXT ---"
+    )
+
+
 async def get_ai_response(
     messages: List[Dict[str, str]],
     timezone: str = "UTC",
     workflow_names: Optional[List[str]] = None,
     connected_providers: Optional[List[str]] = None,
+    business_memories: Optional[List[dict]] = None,
+    session_context: Optional[dict] = None,
 ) -> str:
     """Send messages to Claude and return the assistant's response."""
     from datetime import datetime, timezone as tz
@@ -1299,6 +1392,11 @@ async def get_ai_response(
     else:
         system += "\n\nThe owner has no saved processes yet. If they ask to see their workflows, " \
                   "still use <workflow_list>true</workflow_list> — the system will show an empty state."
+
+    # Inject memory context (Tier 2 session + Tier 3 saved business memories)
+    memory_section = _build_memory_context(business_memories, session_context)
+    if memory_section:
+        system += memory_section
 
     response = await client.messages.create(
         model=CLAUDE_MODEL,
