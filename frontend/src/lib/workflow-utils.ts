@@ -5,9 +5,12 @@ export function getTriggerLabel(
   if (!triggerConfig) return "Manual";
 
   if (triggerConfig.event_type) {
+    if (triggerConfig.event_type === "email_received" && triggerConfig.description) {
+      return `Watches for ${triggerConfig.description}`;
+    }
     const labels: Record<string, string> = {
       new_booking: "When a new booking comes in",
-      email_received: "When an email arrives",
+      email_received: "When a matching email arrives",
       cancellation: "When a booking is cancelled",
     };
     return labels[triggerConfig.event_type] || `When: ${triggerConfig.event_type}`;
