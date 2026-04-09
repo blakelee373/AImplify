@@ -251,16 +251,18 @@ async def execute_step(
             "details": {"error": "Failed to generate parameters for this step"},
         }
 
-    # Merge action_config, but skip bare time strings (HH:MM) that would
-    # overwrite the AI's proper ISO 8601 timestamps for calendar events.
+    # Merge action_config, but skip time values that aren't full ISO 8601
+    # timestamps — the AI generates proper timestamps and bare times like
+    # "2:00 PM" or "14:00" from action_config would overwrite them.
     if action_config:
         import re as _merge_re
-        bare_time_pattern = _merge_re.compile(r"^\d{1,2}:\d{2}$")
+        iso_pattern = _merge_re.compile(r"^\d{4}-\d{2}-\d{2}T")
+        skip_keys = {"duration_minutes", "duration", "title"}
         for key, value in action_config.items():
-            if key in ("start_time", "end_time") and isinstance(value, str) and bare_time_pattern.match(value):
-                continue  # Skip — AI generated a full ISO timestamp
-            if key in ("duration_minutes",):
+            if key in skip_keys:
                 continue  # Internal metadata, not an API parameter
+            if key in ("start_time", "end_time") and isinstance(value, str) and not iso_pattern.match(value):
+                continue  # Skip non-ISO times — AI generated proper timestamps
             params[key] = value
 
     try:
