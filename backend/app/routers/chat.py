@@ -1027,15 +1027,15 @@ def _find_latest_schedule_request(db: Session, conversation_id: int) -> Optional
 
 
 def _update_step_times(db: Session, workflow, old_cron: str, new_cron: str) -> None:
-    """Update workflow step descriptions and action_configs when the schedule time changes.
+    """Update workflow step descriptions and action_configs to match the new schedule.
 
-    Parses hour:minute from old and new cron expressions and replaces references
-    in step descriptions and time-related action_config fields.
+    Directly sets times from the new cron expression instead of trying to
+    find/replace old times (which fails when they're already out of sync).
     """
     import re as _t_re
     from app.models.workflow import WorkflowStep
 
-    def _parse_time(cron_expr: str):
+    def _parse_cron_time(cron_expr: str):
         """Extract (hour, minute) from a 5-field cron expression."""
         parts = cron_expr.strip().split()
         if len(parts) >= 2:
@@ -1045,76 +1045,47 @@ def _update_step_times(db: Session, workflow, old_cron: str, new_cron: str) -> N
                 return None, None
         return None, None
 
-    def _format_time(hour: int, minute: int) -> dict:
-        """Build multiple string representations of a time for replacement."""
-        h12 = hour % 12 or 12
-        ampm = "am" if hour < 12 else "pm"
-        return {
-            "HH:MM": f"{hour:02d}:{minute:02d}",        # 21:45
-            "h:mm": f"{h12}:{minute:02d}",               # 9:45
-            "hampm": f"{h12}:{minute:02d}{ampm}",        # 9:45pm
-            "h_ampm": f"{h12}:{minute:02d} {ampm}",     # 9:45 pm
-        }
-
-    old_h, old_m = _parse_time(old_cron)
-    new_h, new_m = _parse_time(new_cron)
-    if old_h is None or new_h is None:
+    new_h, new_m = _parse_cron_time(new_cron)
+    if new_h is None:
         return
 
-    old_fmts = _format_time(old_h, old_m)
-    new_fmts = _format_time(new_h, new_m)
+    new_h12 = new_h % 12 or 12
+    new_ampm = "AM" if new_h < 12 else "PM"
 
     steps = db.query(WorkflowStep).filter(
         WorkflowStep.workflow_id == workflow.id
     ).all()
 
     for step in steps:
-        # Update description text
-        if step.description:
-            desc = step.description
-            for key in old_fmts:
-                desc = desc.replace(old_fmts[key], new_fmts[key])
-            # Also handle end times (old_time + duration)
-            if step.action_config and step.action_config.get("duration_minutes"):
-                dur = step.action_config["duration_minutes"]
-                old_end_h, old_end_m = old_h, old_m + dur
-                if old_end_m >= 60:
-                    old_end_h += old_end_m // 60
-                    old_end_m = old_end_m % 60
-                new_end_h, new_end_m = new_h, new_m + dur
-                if new_end_m >= 60:
-                    new_end_h += new_end_m // 60
-                    new_end_m = new_end_m % 60
-                old_end_fmts = _format_time(old_end_h % 24, old_end_m)
-                new_end_fmts = _format_time(new_end_h % 24, new_end_m)
-                for key in old_end_fmts:
-                    desc = desc.replace(old_end_fmts[key], new_end_fmts[key])
-            if desc != step.description:
-                step.description = desc
+        cfg = dict(step.action_config) if step.action_config else {}
+        dur = cfg.get("duration_minutes", 5)
 
-        # Update action_config time fields
-        if step.action_config:
-            cfg = dict(step.action_config)
-            changed = False
-            if "start_time" in cfg and cfg["start_time"] == old_fmts["HH:MM"]:
-                cfg["start_time"] = new_fmts["HH:MM"]
-                changed = True
+        # Compute new end time
+        end_h, end_m = new_h, new_m + dur
+        if end_m >= 60:
+            end_h += end_m // 60
+            end_m = end_m % 60
+        end_h = end_h % 24
+        end_h12 = end_h % 12 or 12
+        end_ampm = "AM" if end_h < 12 else "PM"
+
+        # Update action_config time fields if they exist
+        if "start_time" in cfg or "end_time" in cfg:
+            if "start_time" in cfg:
+                cfg["start_time"] = f"{new_h:02d}:{new_m:02d}"
             if "end_time" in cfg:
-                dur = cfg.get("duration_minutes", 5)
-                old_end_h2, old_end_m2 = old_h, old_m + dur
-                if old_end_m2 >= 60:
-                    old_end_h2 += old_end_m2 // 60
-                    old_end_m2 = old_end_m2 % 60
-                old_end_str = f"{old_end_h2 % 24:02d}:{old_end_m2:02d}"
-                if cfg["end_time"] == old_end_str:
-                    new_end_h2, new_end_m2 = new_h, new_m + dur
-                    if new_end_m2 >= 60:
-                        new_end_h2 += new_end_m2 // 60
-                        new_end_m2 = new_end_m2 % 60
-                    cfg["end_time"] = f"{new_end_h2 % 24:02d}:{new_end_m2:02d}"
-                    changed = True
-            if changed:
-                step.action_config = cfg
+                cfg["end_time"] = f"{end_h:02d}:{end_m:02d}"
+            step.action_config = cfg
+
+        # Update description — replace any time-range pattern
+        if step.description:
+            new_desc = _t_re.sub(
+                r"\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*(?:am|pm|AM|PM)?",
+                f"{new_h12}:{new_m:02d}-{end_h12}:{end_m:02d}{new_ampm.lower()}",
+                step.description,
+            )
+            if new_desc != step.description:
+                step.description = new_desc
 
 
 def _execute_workflow_manage(db: Session, action: str, workflow_id: int) -> dict:
