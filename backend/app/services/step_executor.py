@@ -217,9 +217,17 @@ async def execute_step(
             "details": {"error": "Failed to generate parameters for this step"},
         }
 
-    # Merge any explicit action_config from the workflow step (overrides AI-generated)
+    # Merge action_config, but skip bare time strings (HH:MM) that would
+    # overwrite the AI's proper ISO 8601 timestamps for calendar events.
     if action_config:
-        params.update(action_config)
+        import re as _merge_re
+        bare_time_pattern = _merge_re.compile(r"^\d{1,2}:\d{2}$")
+        for key, value in action_config.items():
+            if key in ("start_time", "end_time") and isinstance(value, str) and bare_time_pattern.match(value):
+                continue  # Skip — AI generated a full ISO timestamp
+            if key in ("duration_minutes",):
+                continue  # Internal metadata, not an API parameter
+            params[key] = value
 
     try:
         if canonical == "send_email":
