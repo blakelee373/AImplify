@@ -718,6 +718,17 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     "provider": required_provider,
                 }
 
+    # Suppress action_request if the AI is still asking for information.
+    # The AI sometimes emits <action_request> prematurely while still gathering
+    # fields (e.g., asking "what's your email address?"). If the response ends
+    # with an info-gathering question, drop the action request.
+    if action_request_type and not metadata:
+        _last = clean_content.rsplit(".", 1)[-1].strip().lower() or clean_content.lower()
+        if _last.endswith("?") and _re.search(
+            r"\b(what('?s)?|who|which|where|how much|how many)\b", _last
+        ):
+            action_request_type = None
+
     if action_request_type and not metadata:
         # Check if the required tool is connected before proceeding
         # (skip if workflow/schedule metadata is already set — don't override it)
