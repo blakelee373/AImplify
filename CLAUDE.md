@@ -38,6 +38,7 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - Only the latest assistant message's buttons are active; older ones render as disabled/muted
 - The `choices` handler in chat.py runs AFTER all other signal handlers — if metadata is already set, choices are appended as extra field but don't override `message_type`
 - Do NOT use `<choices>` for yes/no confirmations (handled by confirmation cards), free-form input, or workflow summary confirmations
+- Do NOT inject `[System: ...]` history notes for choices — the AI echoes them. A defensive regex in `parse_ai_response()` strips any `[System: ...]` text the AI generates
 
 ## Time-Based Triggers
 - Background scheduler runs as an asyncio task in FastAPI lifespan, checking every 60s for due workflows
