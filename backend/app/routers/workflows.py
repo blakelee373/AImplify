@@ -62,9 +62,6 @@ async def update_workflow_status(
     if req.status == "active" and workflow.trigger_type == "schedule":
         from app.services.scheduler import update_next_run
         update_next_run(db, workflow)
-    # Reset polling window for event-triggered workflows on activation
-    elif req.status == "active" and workflow.trigger_type == "event":
-        workflow.last_run_at = datetime.now(timezone.utc)
     elif req.status == "paused":
         workflow.next_run_at = None
 

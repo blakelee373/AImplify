@@ -187,35 +187,6 @@ tackle the others right after."
 "That's helpful context! To keep things moving — were there any other steps in \
 that process?"
 
-EMAIL-TRIGGERED WORKFLOWS:
-
-If the owner says their workflow is kicked off by an incoming email (like "when I get \
-an email from a new lead", "when someone replies to a booking confirmation", "when I \
-receive an invoice"), this is an EMAIL-TRIGGERED workflow. During discovery:
-
-a) Ask what kind of emails should kick it off. Offer examples:
-   "What kind of emails should start this? For example:
-    • Emails from a specific person or company
-    • Emails with certain words in the subject
-    • Emails to a specific address or label
-    • Any new email that isn't from you"
-b) Ask follow-up questions to narrow down the filter:
-   - "Is it from a specific sender?" → capture the email address or domain
-   - "Does the subject usually contain certain words?" → capture keywords
-   - "Should I only watch for unread emails?" → usually yes
-c) When summarizing the workflow, describe the email trigger clearly:
-   "Watches your inbox for [description] and then [steps]"
-
-When the AI extraction tool runs, it should set:
-- trigger_type: "event"
-- trigger_config.event_type: "email_received"
-- trigger_config.gmail_query: a valid Gmail search query (e.g., "from:leads@example.com is:unread", "subject:booking confirmation is:unread")
-- trigger_config.description: plain-English description of what emails to watch for
-- trigger_config.frequency: "on_event"
-
-IMPORTANT: Always include "is:unread" in the gmail_query unless the owner specifically \
-says they want to match read emails too. This prevents re-processing old emails.
-
 WORKFLOW MANAGEMENT — PAUSE, RESUME, OR DELETE AN EXISTING PROCESS:
 
 If the user wants to pause, resume, or delete an existing process they already set up, \
@@ -380,11 +351,6 @@ WORKFLOW_TOOL = {
                         "type": "string",
                         "description": "Specific event (e.g., 'new_booking', 'email_received')",
                     },
-                    "gmail_query": {
-                        "type": "string",
-                        "description": "Gmail search query for email triggers (e.g., 'from:jane@example.com is:unread', 'subject:booking is:unread'). "
-                        "Supports Gmail search operators: from:, to:, subject:, has:, is:unread, label:, newer_than:, category:, etc.",
-                    },
                     "schedule": {
                         "type": "string",
                         "description": "Schedule description if time-based (e.g., 'every morning at 9am')",
@@ -440,17 +406,7 @@ IMPORTANT — When trigger_type is "schedule":
 - Cron format: minute hour day_of_month month day_of_week
 - Examples: "every morning at 9am" → "0 9 * * *", "every Monday at 8am" → "0 8 * * 1", \
 "weekdays at 5pm" → "0 17 * * 1-5", "every hour" → "0 * * * *"
-- Also set trigger_config.timezone to the user's timezone if known (from conversation context).
-
-IMPORTANT — When trigger_type is "event" and event_type is "email_received":
-- You MUST generate a valid Gmail search query in trigger_config.gmail_query.
-- Common Gmail operators: from:sender, subject:keyword, is:unread, label:name, category:primary, has:attachment
-- Examples: "when a new lead emails" → "is:unread category:primary -from:me", \
-"when Jane emails about invoices" → "from:jane@example.com subject:invoice is:unread", \
-"when I get a booking confirmation" → "subject:booking confirmation is:unread"
-- Always include "is:unread" to prevent re-processing.
-- Set trigger_config.frequency to "on_event".
-- Set trigger_config.description to a plain-English description of the email filter.\
+- Also set trigger_config.timezone to the user's timezone if known (from conversation context).\
 """
 
 
@@ -861,55 +817,6 @@ async def extract_schedule_from_conversation(
         for block in response.content:
             if block.type == "tool_use" and block.name == "extract_schedule":
                 return block.input
-        return None
-    except Exception:
-        return None
-
-
-EMAIL_FILTER_EXTRACTION_TOOL = {
-    "name": "extract_email_filter",
-    "description": "Extract Gmail filter criteria from the conversation for an email-triggered workflow.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "gmail_query": {
-                "type": "string",
-                "description": "Gmail search query (e.g., 'from:leads@example.com is:unread')",
-            },
-            "filter_description": {
-                "type": "string",
-                "description": "Human-readable description of the email filter (e.g., 'emails from new leads')",
-            },
-        },
-        "required": ["gmail_query", "filter_description"],
-    },
-}
-
-
-async def extract_email_filter_from_conversation(
-    messages: List[Dict[str, str]],
-) -> Optional[dict]:
-    """Extract Gmail filter criteria from conversation using tool_use."""
-    try:
-        response = await client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1024,
-            system=(
-                "You are a Gmail filter extraction system. Analyze the conversation and extract "
-                "the Gmail search query that matches the emails the user described. Use Gmail search "
-                "operators: from:, to:, subject:, is:unread, label:, category:, has:attachment, etc. "
-                "Always include 'is:unread' unless the user specifically wants to match read emails. "
-                "Use the extract_email_filter tool to output the result."
-            ),
-            messages=messages,
-            tools=[EMAIL_FILTER_EXTRACTION_TOOL],
-            tool_choice={"type": "tool", "name": "extract_email_filter"},
-        )
-
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "extract_email_filter":
-                return block.input
-
         return None
     except Exception:
         return None
