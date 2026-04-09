@@ -1,5 +1,9 @@
 # AImplify - Project Instructions
 
+## CRITICAL RULES
+- **NEVER merge PRs to main.** Only the owner merges. Claude creates branches and PRs — that's it.
+- **NEVER run `gh pr merge`.** No exceptions.
+
 ## Product
 AI operations layer for medspas. Owners describe how their business works in plain conversation, and AImplify builds AI agents to automate repetitive tasks.
 
