@@ -1149,7 +1149,7 @@ def match_workflow_by_name(db_workflows: list, name_query: str) -> Optional[obje
 
 PROVIDER_DISPLAY = {
     "gmail": {"name": "Gmail", "capabilities": "send emails"},
-    "google_calendar": {"name": "Google Calendar", "capabilities": "create events, list events, and check availability"},
+    "google_calendar": {"name": "Google Calendar", "capabilities": "create events, list events, check availability, and watch for new or upcoming calendar events"},
 }
 
 
