@@ -627,9 +627,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 edit_data = await extract_workflow_edit_from_conversation(
                     messages, current_steps
                 )
-                if edit_data and edit_data.get("step_updates"):
+                has_updates = edit_data and edit_data.get("step_updates")
+                has_new = edit_data and edit_data.get("new_steps")
+                if has_updates or has_new:
                     from app.models.workflow import WorkflowStep
-                    for update in edit_data["step_updates"]:
+
+                    # Update existing steps
+                    for update in (edit_data.get("step_updates") or []):
                         step = db.query(WorkflowStep).filter(
                             WorkflowStep.workflow_id == wf.id,
                             WorkflowStep.step_order == update["step_order"],
@@ -639,12 +643,31 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                             if update.get("new_action_config"):
                                 step.action_config = update["new_action_config"]
 
+                    # Add new steps
+                    if has_new:
+                        max_order = max(
+                            (s.step_order for s in wf.steps), default=0
+                        )
+                        for new_step in edit_data["new_steps"]:
+                            max_order += 1
+                            db.add(WorkflowStep(
+                                workflow_id=wf.id,
+                                step_order=max_order,
+                                action_type=new_step.get("action_type", "unknown"),
+                                action_config=new_step.get("action_config"),
+                                description=new_step.get("description"),
+                            ))
+
                     wf.updated_at = datetime.now(timezone.utc)
                     log_entry = ActivityLog(
                         workflow_id=wf.id,
                         action_type="workflow_edited",
                         description=f"Steps updated for '{wf.name}' via chat",
-                        details={"updates": edit_data["step_updates"], "source": "chat"},
+                        details={
+                            "updates": edit_data.get("step_updates", []),
+                            "new_steps": edit_data.get("new_steps", []),
+                            "source": "chat",
+                        },
                     )
                     db.add(log_entry)
                     db.commit()

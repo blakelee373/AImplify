@@ -1055,18 +1055,19 @@ async def extract_email_filter_from_conversation(
 
 WORKFLOW_EDIT_EXTRACTION_TOOL = {
     "name": "extract_workflow_edit",
-    "description": "Extract the changes the user wants to make to a workflow's steps.",
+    "description": "Extract the changes the user wants to make to a workflow's steps, including updates to existing steps and/or new steps to add.",
     "input_schema": {
         "type": "object",
         "properties": {
             "step_updates": {
                 "type": "array",
+                "description": "Changes to existing steps (matched by step_order)",
                 "items": {
                     "type": "object",
                     "properties": {
                         "step_order": {
                             "type": "integer",
-                            "description": "Which step to update (1-based)",
+                            "description": "Which existing step to update (1-based)",
                         },
                         "new_description": {
                             "type": "string",
@@ -1078,6 +1079,28 @@ WORKFLOW_EDIT_EXTRACTION_TOOL = {
                         },
                     },
                     "required": ["step_order", "new_description"],
+                },
+            },
+            "new_steps": {
+                "type": "array",
+                "description": "Brand new steps to add to the workflow",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action_type": {
+                            "type": "string",
+                            "description": "Action type (e.g., 'send_email', 'create_event')",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Plain-English description of what this step does",
+                        },
+                        "action_config": {
+                            "type": "object",
+                            "description": "Step-specific configuration details",
+                        },
+                    },
+                    "required": ["action_type", "description"],
                 },
             },
         },
@@ -1103,6 +1126,9 @@ async def extract_workflow_edit_from_conversation(
                 "You are a workflow editor. The user wants to change what a workflow does. "
                 "Given the current workflow steps and the conversation, extract the changes. "
                 "Use the extract_workflow_edit tool to output the result.\n\n"
+                "If the user wants to CHANGE an existing step, put it in step_updates.\n"
+                "If the user wants to ADD a new step, put it in new_steps with the action_type "
+                "(send_email, create_event, check_calendar) and description.\n\n"
                 f"Current workflow steps:\n{steps_desc}"
             ),
             messages=messages,
