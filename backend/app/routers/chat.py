@@ -178,6 +178,11 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 wf = m.metadata_json.get("workflow", {})
                 logs = m.metadata_json.get("recent_activity", [])
                 content += f"\n\n[System: Status for '{wf.get('name', '')}' was shown — {len(logs)} recent activity entries.]"
+            elif msg_type == "choices":
+                options = m.metadata_json.get("choices", [])
+                if options:
+                    content += f"\n\n[System: Clickable choice buttons were shown: {' / '.join(options)}. " \
+                               "The user may have clicked one of these.]"
         messages.append({"role": m.role, "content": content})
 
     # Get AI response and parse for signal tags
@@ -932,6 +937,14 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "success": False,
                 "error": str(e),
             }
+
+    # ── Attach choices if present ───────────────────────────────────────
+    if signals.get("choices"):
+        if metadata is None:
+            metadata = {"message_type": "choices", "choices": signals["choices"]}
+        else:
+            # Append choices to existing metadata (other card type takes priority)
+            metadata["choices"] = signals["choices"]
 
     # Save assistant message
     assistant_message = Message(

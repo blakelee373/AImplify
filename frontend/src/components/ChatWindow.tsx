@@ -31,6 +31,7 @@ interface MessageMetadata {
   query?: string;
   provider?: string;
   error?: string;
+  choices?: string[];
 }
 
 interface Message {
@@ -130,6 +131,46 @@ export function ChatWindow({ conversationId, onConversationCreated }: ChatWindow
       window.location.href = `${API_URL}/api/integrations/${provider}/connect`;
     }
   }, []);
+
+  // ── Choice button handling ────────────────────────────────────────────
+  const handleChoiceSelect = useCallback(
+    async (choiceText: string) => {
+      if (loading) return;
+
+      const userMsg: Message = { id: Date.now(), role: "user", content: choiceText };
+      setMessages((prev) => [...prev, userMsg]);
+      setLoading(true);
+
+      const sendId = conversationId ?? createdIdRef.current;
+
+      try {
+        const data = await api.post<ChatResponse>("/api/chat", {
+          message: choiceText,
+          conversation_id: sendId,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
+
+        if (!sendId && data.conversation_id) {
+          createdIdRef.current = data.conversation_id;
+          onConversationCreated?.(data.conversation_id);
+        }
+
+        setMessages((prev) => [...prev, data.message]);
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            role: "assistant",
+            content: "Sorry, something went wrong. Please try again.",
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loading, conversationId, onConversationCreated]
+  );
 
   useEffect(() => {
     const VALID_PROVIDERS = ["gmail", "google_calendar"];
@@ -252,15 +293,23 @@ export function ChatWindow({ conversationId, onConversationCreated }: ChatWindow
             Start by describing a task you do repeatedly.
           </div>
         )}
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            role={msg.role}
-            content={msg.content}
-            metadata={msg.metadata}
-            onConnectTool={handleConnectTool}
-          />
-        ))}
+        {(() => {
+          const lastAssistantId = messages
+            .filter((m) => m.role === "assistant")
+            .at(-1)?.id;
+          return messages.map((msg) => (
+            <MessageBubble
+              key={msg.id}
+              role={msg.role}
+              content={msg.content}
+              metadata={msg.metadata}
+              onConnectTool={handleConnectTool}
+              onChoiceSelect={handleChoiceSelect}
+              isLatestAssistant={msg.role === "assistant" && msg.id === lastAssistantId}
+              loading={loading}
+            />
+          ));
+        })()}
         {loading && (
           <div className="flex justify-start">
             <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm text-stone-400 rounded-bl-md">
