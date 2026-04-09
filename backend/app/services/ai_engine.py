@@ -128,6 +128,13 @@ and include the <action_request> tag again.
 
 WORKFLOW SETUP — SET UP A RECURRING PROCESS:
 
+CRITICAL — EDIT vs NEW: If the conversation already contains a saved workflow (you can \
+see a [System: ...] note about a workflow being saved or confirmed earlier), and the user \
+wants to change something about it (like the reply text, subject line, or steps), this is \
+an EDIT — use <workflow_edit> and <workflow_edit_confirmed> tags. Do NOT create a new \
+workflow. Do NOT use <workflow_ready> or <workflow_confirmed> for changes to existing workflows. \
+Only use the workflow setup flow below for BRAND NEW workflows that don't exist yet.
+
 If the user describes a task they want to happen automatically or repeatedly (not a \
 one-time action), follow the workflow discovery flow below. \
 IMPORTANT: Even if the recurring task involves sending email, creating events, or \
@@ -186,6 +193,35 @@ tackle the others right after."
 7. OFF-TOPIC — If the user goes off-topic, gently steer back:
 "That's helpful context! To keep things moving — were there any other steps in \
 that process?"
+
+EMAIL-TRIGGERED WORKFLOWS:
+
+If the owner says their workflow is kicked off by an incoming email (like "when I get \
+an email from a new lead", "when someone replies to a booking confirmation", "when I \
+receive an invoice"), this is an EMAIL-TRIGGERED workflow. During discovery:
+
+a) Ask what kind of emails should kick it off. Offer examples:
+   "What kind of emails should start this? For example:
+    • Emails from a specific person or company
+    • Emails with certain words in the subject
+    • Emails to a specific address or label
+    • Any new email that isn't from you"
+b) Ask follow-up questions to narrow down the filter:
+   - "Is it from a specific sender?" → capture the email address or domain
+   - "Does the subject usually contain certain words?" → capture keywords
+   - "Should I only watch for unread emails?" → usually yes
+c) When summarizing the workflow, describe the email trigger clearly:
+   "Watches your inbox for [description] and then [steps]"
+
+When the AI extraction tool runs, it should set:
+- trigger_type: "event"
+- trigger_config.event_type: "email_received"
+- trigger_config.gmail_query: a valid Gmail search query (e.g., "from:leads@example.com is:unread", "subject:booking confirmation is:unread")
+- trigger_config.description: plain-English description of what emails to watch for
+- trigger_config.frequency: "on_event"
+
+IMPORTANT: Always include "is:unread" in the gmail_query unless the owner specifically \
+says they want to match read emails too. This prevents re-processing old emails.
 
 WORKFLOW MANAGEMENT — PAUSE, RESUME, OR DELETE AN EXISTING PROCESS:
 
@@ -258,6 +294,31 @@ NEVER say workflows can only run automatically — the owner CAN trigger them ma
 When the user confirms ("yes", "go ahead"):
 1. Respond with something short like "Running it now!"
 2. Append: <workflow_run_confirmed>WORKFLOW_NAME</workflow_run_confirmed>
+
+If the user says "no" or changes their mind, acknowledge it and move on.
+
+WORKFLOW EDITING — CHANGE WHAT A WORKFLOW DOES:
+
+If the owner wants to change what a workflow does — like updating the email response, \
+changing the subject line, or modifying step details — handle it as a workflow edit.
+
+Recognize requests like:
+- "Change the welcome reply to say something different"
+- "Update the response to include our phone number"
+- "Make it say 'Thanks for contacting us' instead"
+- "Change the email subject to 'Welcome aboard'"
+
+When you recognize a workflow edit request:
+1. Confirm what you understood: "Got it — you'd like to update [workflow name] to \
+[description of change]. Sound good?"
+2. At the very end of your message, append this hidden tag on its own line:
+<workflow_edit>WORKFLOW_NAME</workflow_edit>
+Replace WORKFLOW_NAME with the name of the workflow.
+
+When the user confirms ("yes," "go ahead," "do it"):
+1. Respond with something short like "Done — I've updated that for you!"
+2. At the very end of your message, append this hidden tag:
+<workflow_edit_confirmed>WORKFLOW_NAME</workflow_edit_confirmed>
 
 If the user says "no" or changes their mind, acknowledge it and move on.
 
@@ -351,6 +412,11 @@ WORKFLOW_TOOL = {
                         "type": "string",
                         "description": "Specific event (e.g., 'new_booking', 'email_received')",
                     },
+                    "gmail_query": {
+                        "type": "string",
+                        "description": "Gmail search query for email triggers (e.g., 'from:jane@example.com is:unread', 'subject:booking is:unread'). "
+                        "Supports Gmail search operators: from:, to:, subject:, has:, is:unread, label:, newer_than:, category:, etc.",
+                    },
                     "schedule": {
                         "type": "string",
                         "description": "Schedule description if time-based (e.g., 'every morning at 9am')",
@@ -406,7 +472,20 @@ IMPORTANT — When trigger_type is "schedule":
 - Cron format: minute hour day_of_month month day_of_week
 - Examples: "every morning at 9am" → "0 9 * * *", "every Monday at 8am" → "0 8 * * 1", \
 "weekdays at 5pm" → "0 17 * * 1-5", "every hour" → "0 * * * *"
-- Also set trigger_config.timezone to the user's timezone if known (from conversation context).\
+- Also set trigger_config.timezone to the user's timezone if known (from conversation context).
+
+IMPORTANT — When trigger_type is "event" and event_type is "email_received":
+- You MUST generate a valid Gmail search query in trigger_config.gmail_query.
+- Common Gmail operators: from:sender, subject:keyword, is:unread, label:name, category:primary, has:attachment
+- Examples: "when a new lead emails" → "is:unread category:primary -from:me", \
+"when Jane emails about invoices" → "from:jane@example.com subject:invoice is:unread", \
+"when I get a booking confirmation" → "subject:booking confirmation is:unread"
+- Always include "is:unread" to prevent re-processing.
+- Set trigger_config.frequency to "on_event".
+- Set trigger_config.description to a plain-English description of the email filter.
+- CRITICAL: Do NOT create "check" or "filter" steps in the workflow (like "check_email_subject"). \
+The gmail_query already handles filtering — only include ACTION steps (send_email, create_event, etc.). \
+For reply workflows, use action_type "send_email" with a description like "Send welcome reply to the sender".\
 """
 
 
@@ -507,6 +586,20 @@ def parse_ai_response(raw_content: str) -> dict:
     if workflow_schedule_confirmed_match:
         workflow_schedule_confirmed = workflow_schedule_confirmed_match.group(1).strip()
 
+    # Extract workflow_edit (e.g., <workflow_edit>New lead welcome reply</workflow_edit>)
+    workflow_edit = None
+    workflow_edit_match = re.search(r"<workflow_edit>(.+?)</workflow_edit>", raw_content)
+    if workflow_edit_match:
+        workflow_edit = workflow_edit_match.group(1).strip()
+
+    # Extract workflow_edit_confirmed
+    workflow_edit_confirmed = None
+    workflow_edit_confirmed_match = re.search(
+        r"<workflow_edit_confirmed>(.+?)</workflow_edit_confirmed>", raw_content
+    )
+    if workflow_edit_confirmed_match:
+        workflow_edit_confirmed = workflow_edit_confirmed_match.group(1).strip()
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
@@ -536,6 +629,10 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(workflow_schedule_match.group(0), "")
     if workflow_schedule_confirmed_match:
         clean = clean.replace(workflow_schedule_confirmed_match.group(0), "")
+    if workflow_edit_match:
+        clean = clean.replace(workflow_edit_match.group(0), "")
+    if workflow_edit_confirmed_match:
+        clean = clean.replace(workflow_edit_confirmed_match.group(0), "")
     clean = clean.strip()
 
     return {
@@ -556,6 +653,8 @@ def parse_ai_response(raw_content: str) -> dict:
         "workflow_run_confirmed": workflow_run_confirmed,
         "workflow_schedule": workflow_schedule,
         "workflow_schedule_confirmed": workflow_schedule_confirmed,
+        "workflow_edit": workflow_edit,
+        "workflow_edit_confirmed": workflow_edit_confirmed,
     }
 
 
@@ -817,6 +916,121 @@ async def extract_schedule_from_conversation(
         for block in response.content:
             if block.type == "tool_use" and block.name == "extract_schedule":
                 return block.input
+        return None
+    except Exception:
+        return None
+
+
+EMAIL_FILTER_EXTRACTION_TOOL = {
+    "name": "extract_email_filter",
+    "description": "Extract Gmail filter criteria from the conversation for an email-triggered workflow.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "gmail_query": {
+                "type": "string",
+                "description": "Gmail search query (e.g., 'from:leads@example.com is:unread')",
+            },
+            "filter_description": {
+                "type": "string",
+                "description": "Human-readable description of the email filter (e.g., 'emails from new leads')",
+            },
+        },
+        "required": ["gmail_query", "filter_description"],
+    },
+}
+
+
+async def extract_email_filter_from_conversation(
+    messages: List[Dict[str, str]],
+) -> Optional[dict]:
+    """Extract Gmail filter criteria from conversation using tool_use."""
+    try:
+        response = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=(
+                "You are a Gmail filter extraction system. Analyze the conversation and extract "
+                "the Gmail search query that matches the emails the user described. Use Gmail search "
+                "operators: from:, to:, subject:, is:unread, label:, category:, has:attachment, etc. "
+                "Always include 'is:unread' unless the user specifically wants to match read emails. "
+                "Use the extract_email_filter tool to output the result."
+            ),
+            messages=messages,
+            tools=[EMAIL_FILTER_EXTRACTION_TOOL],
+            tool_choice={"type": "tool", "name": "extract_email_filter"},
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "extract_email_filter":
+                return block.input
+
+        return None
+    except Exception:
+        return None
+
+
+WORKFLOW_EDIT_EXTRACTION_TOOL = {
+    "name": "extract_workflow_edit",
+    "description": "Extract the changes the user wants to make to a workflow's steps.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "step_updates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "step_order": {
+                            "type": "integer",
+                            "description": "Which step to update (1-based)",
+                        },
+                        "new_description": {
+                            "type": "string",
+                            "description": "Updated plain-English description for this step",
+                        },
+                        "new_action_config": {
+                            "type": "object",
+                            "description": "Updated config (e.g., new subject, body, recipient)",
+                        },
+                    },
+                    "required": ["step_order", "new_description"],
+                },
+            },
+        },
+        "required": ["step_updates"],
+    },
+}
+
+
+async def extract_workflow_edit_from_conversation(
+    messages: List[Dict[str, str]],
+    workflow_steps: List[dict],
+) -> Optional[dict]:
+    """Extract workflow step edits from conversation using tool_use."""
+    steps_desc = "\n".join(
+        f"Step {s['step_order']}: [{s['action_type']}] {s['description']}"
+        for s in workflow_steps
+    )
+    try:
+        response = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=(
+                "You are a workflow editor. The user wants to change what a workflow does. "
+                "Given the current workflow steps and the conversation, extract the changes. "
+                "Use the extract_workflow_edit tool to output the result.\n\n"
+                f"Current workflow steps:\n{steps_desc}"
+            ),
+            messages=messages,
+            tools=[WORKFLOW_EDIT_EXTRACTION_TOOL],
+            tool_choice={"type": "tool", "name": "extract_workflow_edit"},
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "extract_workflow_edit":
+                return block.input
+
         return None
     except Exception:
         return None

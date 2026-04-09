@@ -24,7 +24,7 @@ AI operations layer for medspas. Owners describe how their business works in pla
 ## Signal Tag System
 - AI embeds hidden XML tags in responses (e.g., `<action_request>send_email</action_request>`) to trigger backend actions
 - Tags are parsed in `parse_ai_response()` in `ai_engine.py`, stripped from user-visible content
-- Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `workflow_schedule`, `workflow_schedule_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`
+- Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `workflow_schedule`, `workflow_schedule_confirmed`, `workflow_edit`, `workflow_edit_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`
 - New action types must be added to: `ACTION_EXTRACTION_TOOLS` (ai_engine.py), `ACTION_PROVIDER` map (chat.py), `_execute_chat_action` (chat.py), `ACTION_LABELS` (MessageBubble.tsx)
 - Handler ordering in chat.py matters: workflow query handlers (list/status/activity/run) must run BEFORE `_detect_action_gathering` safety net to prevent false positives on words like "schedule" in workflow descriptions
 - When adding new AI capabilities via signal tags, the system prompt must assertively state the AI HAS the capability (like connection status does) — otherwise the AI may claim it can't do it
@@ -42,6 +42,26 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - Content-based fallbacks exist for `workflow_schedule` and `action_request` tags when the AI forgets to emit them
 - `_detect_tool_from_user_intent()` pre-flight check scans user messages for tool keywords and short-circuits with connect card before calling AI
 - Google OAuth tokens expire after 7 days in "Testing" mode; `google_auth.py` catches `invalid_grant` and marks integration as "expired"
+
+## Email-Based Triggers
+- Background email watcher runs as an asyncio task in FastAPI lifespan, polling Gmail every 120s
+- Watches active workflows with `trigger_type="event"` and `trigger_config.event_type="email_received"`
+- `trigger_config.gmail_query` stores Gmail search syntax (e.g., `"from:leads@example.com is:unread"`)
+- `last_run_at` tracks the polling window start; `after:{epoch}` bounds the Gmail query
+- Matched emails are marked as read after processing to prevent re-triggering on `is:unread` queries
+- In-memory `OrderedDict` deduplicates message IDs per workflow (capped at 200, FIFO eviction)
+- Email context (sender, subject, snippet) is injected into workflow step execution
+- Claude generates Gmail queries during workflow extraction when `trigger_type="event"` and `event_type="email_received"`
+- System prompt guides owners through describing email filters in plain language
+- `extract_email_filter_from_conversation()` in `ai_engine.py` is scaffolding for future email filter editing
+- SQLite strips timezone info from datetimes — always treat naive `last_run_at` as UTC when converting to epoch
+
+## Workflow Editing
+- `workflow_edit` / `workflow_edit_confirmed` signal tags let owners change step content via chat
+- Edit handler prefers the workflow linked to the current conversation (by `conversation_id`) over name matching — prevents editing the wrong workflow when names are duplicated
+- If AI mistakenly uses `workflow_confirmed` in a conversation that already has a workflow, backend redirects to edit flow instead of creating a duplicate
+- Step executor passes `action_config` into the AI param generator prompt so saved subject/body values are used
+- Unknown action types (e.g., `check_email_subject`) are skipped as no-ops instead of failing the workflow
 
 ## Tool Connection System
 - Connection status is dynamic in the system prompt — built by `_build_connection_status()` from actual DB state

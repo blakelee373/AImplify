@@ -23,6 +23,7 @@ from app.services.ai_engine import (
     extract_action_from_conversation,
     extract_run_context_from_conversation,
     extract_schedule_from_conversation,
+    extract_workflow_edit_from_conversation,
     match_workflow_by_name,
 )
 from app.services.workflow_engine import create_workflow_from_draft
@@ -154,6 +155,19 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 else:
                     error = m.metadata_json.get("error", "")
                     content += f"\n\n[System: Failed to update schedule for '{wf_name}'. Error: {error}]"
+            elif msg_type == "workflow_edit_request":
+                wf_name = m.metadata_json.get("workflow_name", "")
+                content += f"\n\n[System: A confirmation card to edit '{wf_name}' is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <workflow_edit_confirmed> — " \
+                           "do NOT re-summarize or show another <workflow_edit>.]"
+            elif msg_type == "workflow_edit_result":
+                success = m.metadata_json.get("success", False)
+                wf_name = m.metadata_json.get("workflow_name", "")
+                if success:
+                    content += f"\n\n[System: Workflow '{wf_name}' was updated successfully.]"
+                else:
+                    error = m.metadata_json.get("error", "")
+                    content += f"\n\n[System: Failed to update '{wf_name}'. Error: {error}]"
             elif msg_type == "workflow_list":
                 wfs = m.metadata_json.get("workflows", [])
                 content += f"\n\n[System: Workflow list was shown to user — {len(wfs)} workflow(s).]"
@@ -226,18 +240,70 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             metadata = {"message_type": "workflow_summary", "workflow_draft": draft}
 
     if signals["workflow_confirmed"]:
-        # Find the most recent workflow draft in this conversation
-        draft = _find_latest_draft(db, conversation.id)
-        if draft:
-            # Inject the user's timezone into schedule trigger config so cron
-            # fires at the right local time (not UTC)
-            if draft.get("trigger_type") == "schedule":
-                tc = draft.get("trigger_config") or {}
-                if "timezone" not in tc:
-                    tc["timezone"] = tz
-                    draft["trigger_config"] = tc
-            workflow = create_workflow_from_draft(db, draft, conversation.id)
-            metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
+        # Safety check: if a workflow already exists for this conversation,
+        # the AI probably meant to edit it, not create a duplicate.
+        existing_wf = db.query(Workflow).filter(
+            Workflow.conversation_id == conversation.id
+        ).first()
+        if existing_wf:
+            # Redirect to edit flow instead of creating a duplicate
+            current_steps = [
+                {
+                    "step_order": s.step_order,
+                    "action_type": s.action_type,
+                    "description": s.description or s.action_type,
+                }
+                for s in sorted(existing_wf.steps, key=lambda x: x.step_order)
+            ]
+            edit_data = await extract_workflow_edit_from_conversation(
+                messages, current_steps
+            )
+            if edit_data and edit_data.get("step_updates"):
+                from app.models.workflow import WorkflowStep
+                for update in edit_data["step_updates"]:
+                    step = db.query(WorkflowStep).filter(
+                        WorkflowStep.workflow_id == existing_wf.id,
+                        WorkflowStep.step_order == update["step_order"],
+                    ).first()
+                    if step:
+                        step.description = update.get("new_description", step.description)
+                        if update.get("new_action_config"):
+                            step.action_config = update["new_action_config"]
+
+                existing_wf.updated_at = datetime.now(timezone.utc)
+                log_entry = ActivityLog(
+                    workflow_id=existing_wf.id,
+                    action_type="workflow_edited",
+                    description=f"Steps updated for '{existing_wf.name}' via chat",
+                    details={"updates": edit_data["step_updates"], "source": "chat"},
+                )
+                db.add(log_entry)
+                db.commit()
+                metadata = {
+                    "message_type": "workflow_edit_result",
+                    "success": True,
+                    "workflow_name": existing_wf.name,
+                }
+            else:
+                metadata = {
+                    "message_type": "workflow_edit_result",
+                    "success": False,
+                    "workflow_name": existing_wf.name,
+                    "error": "Could not understand the changes.",
+                }
+        # No existing workflow — proceed with normal creation
+        if not metadata:
+            draft = _find_latest_draft(db, conversation.id)
+            if draft:
+                # Inject the user's timezone into schedule trigger config so cron
+                # fires at the right local time (not UTC)
+                if draft.get("trigger_type") == "schedule":
+                    tc = draft.get("trigger_config") or {}
+                    if "timezone" not in tc:
+                        tc["timezone"] = tz
+                        draft["trigger_config"] = tc
+                workflow = create_workflow_from_draft(db, draft, conversation.id)
+                metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
 
     # ── Workflow queries (list, status, activity, run) ────────────────
     # These must be handled BEFORE the action-gathering safety net, which can
@@ -500,6 +566,117 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         else:
             metadata = {
                 "message_type": "workflow_schedule_result",
+                "success": False,
+                "workflow_name": wf_name,
+                "error": "Could not find that workflow.",
+            }
+
+    # ── Workflow editing (change step content) ─────────────────────────────
+    if signals.get("workflow_edit"):
+        wf_name = signals["workflow_edit"]
+        # Prefer the workflow linked to THIS conversation over name matching
+        matched = db.query(Workflow).filter(
+            Workflow.conversation_id == conversation.id
+        ).first()
+        if not matched:
+            matched = match_workflow_by_name(all_workflows, wf_name)
+        if matched:
+            metadata = {
+                "message_type": "workflow_edit_request",
+                "workflow_id": matched.id,
+                "workflow_name": matched.name,
+                "steps": [
+                    {
+                        "step_order": s.step_order,
+                        "action_type": s.action_type,
+                        "description": s.description or s.action_type,
+                    }
+                    for s in sorted(matched.steps, key=lambda x: x.step_order)
+                ],
+            }
+        else:
+            metadata = {
+                "message_type": "workflow_manage_not_found",
+                "manage_action": "edit",
+                "query": wf_name,
+            }
+
+    if signals.get("workflow_edit_confirmed"):
+        wf_name = signals["workflow_edit_confirmed"]
+        # Find the pending edit request from a prior message
+        prior = _find_latest_edit_request(db, conversation.id)
+        wf_id = prior.get("workflow_id") if prior else None
+
+        if not wf_id:
+            # Prefer workflow linked to THIS conversation
+            conv_wf = db.query(Workflow).filter(
+                Workflow.conversation_id == conversation.id
+            ).first()
+            if conv_wf:
+                wf_id = conv_wf.id
+            else:
+                matched = match_workflow_by_name(all_workflows, wf_name)
+                wf_id = matched.id if matched else None
+
+        if wf_id:
+            wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
+            if wf:
+                # Get current steps for context
+                current_steps = [
+                    {
+                        "step_order": s.step_order,
+                        "action_type": s.action_type,
+                        "description": s.description or s.action_type,
+                    }
+                    for s in sorted(wf.steps, key=lambda x: x.step_order)
+                ]
+                edit_data = await extract_workflow_edit_from_conversation(
+                    messages, current_steps
+                )
+                if edit_data and edit_data.get("step_updates"):
+                    from app.models.workflow import WorkflowStep
+                    for update in edit_data["step_updates"]:
+                        step = db.query(WorkflowStep).filter(
+                            WorkflowStep.workflow_id == wf.id,
+                            WorkflowStep.step_order == update["step_order"],
+                        ).first()
+                        if step:
+                            step.description = update.get("new_description", step.description)
+                            if update.get("new_action_config"):
+                                step.action_config = update["new_action_config"]
+
+                    wf.updated_at = datetime.now(timezone.utc)
+                    log_entry = ActivityLog(
+                        workflow_id=wf.id,
+                        action_type="workflow_edited",
+                        description=f"Steps updated for '{wf.name}' via chat",
+                        details={"updates": edit_data["step_updates"], "source": "chat"},
+                    )
+                    db.add(log_entry)
+                    db.commit()
+
+                    metadata = {
+                        "message_type": "workflow_edit_result",
+                        "success": True,
+                        "workflow_name": wf.name,
+                    }
+                else:
+                    metadata = {
+                        "message_type": "workflow_edit_result",
+                        "success": False,
+                        "workflow_name": wf.name,
+                        "error": "Could not understand the changes.",
+                    }
+            else:
+                metadata = {
+                    "message_type": "workflow_edit_result",
+                    "success": False,
+                    "workflow_name": wf_name,
+                    "error": "Could not find that workflow.",
+                }
+        else:
+            metadata = {
+                "message_type": "workflow_edit_result",
                 "success": False,
                 "workflow_name": wf_name,
                 "error": "Could not find that workflow.",
@@ -1001,6 +1178,20 @@ def _find_latest_manage_request(db: Session, conversation_id: int) -> Optional[d
     for msg in msgs:
         if msg.metadata_json and isinstance(msg.metadata_json, dict):
             if msg.metadata_json.get("message_type") == "workflow_manage_request":
+                return msg.metadata_json
+    return None
+
+
+def _find_latest_edit_request(db: Session, conversation_id: int) -> Optional[dict]:
+    """Find the most recent workflow_edit_request metadata in this conversation."""
+    msgs = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).all()
+
+    for msg in msgs:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "workflow_edit_request":
                 return msg.metadata_json
     return None
 

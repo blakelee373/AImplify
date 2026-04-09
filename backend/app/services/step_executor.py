@@ -95,6 +95,18 @@ owner_email or client_email from the runtime context as the recipient. \
 NEVER use placeholder emails like "me@example.com" or "self" — always use the \
 actual email address from the context.
 
+SAVED STEP CONFIG — When a "Saved step config" section is provided, use those values \
+as the basis for your parameters. If a "message" or "body" field is provided, use that \
+as the email body. If a "subject" field is provided, use that as the subject line. \
+Do NOT ignore saved config — the owner specifically set these values.
+
+EMAIL-TRIGGERED WORKFLOWS — When the context contains email_sender, email_subject, \
+and email_snippet, this workflow was triggered by an incoming email. \
+For reply/response steps, use email_sender as the recipient. \
+You can reference the original email's subject and content to personalize the response. \
+Example: if email_sender is "jane@example.com" and the step says "send welcome reply", \
+set recipient to "jane@example.com".
+
 For dates and times, use the day reference below to convert day names to exact dates. \
 Always produce full ISO 8601 timestamps with the correct timezone offset.\
 """
@@ -154,9 +166,17 @@ async def _generate_params(
 
     system = PARAM_GEN_SYSTEM + f"\n\nToday is {now.strftime('%A, %B %d, %Y')}. Timezone: {user_tz}.\n\nUpcoming days:\n{week_ref}"
 
+    # Include action_config in the prompt so AI uses saved values
+    config_str = ""
+    if context.get("_action_config"):
+        cfg = context["_action_config"]
+        config_str = "\nSaved step config (use these values when present):\n"
+        config_str += "\n".join(f"- {k}: {v}" for k, v in cfg.items())
+
     user_message = (
         f"Workflow: {workflow_name}\n"
-        f"Step: {step_description}\n\n"
+        f"Step: {step_description}\n"
+        f"{config_str}\n"
         f"Runtime context:\n{context_str}\n\n"
         f"Generate the parameters for this action."
     )
@@ -198,17 +218,24 @@ async def execute_step(
     """
     canonical = _resolve_action_type(action_type)
     if not canonical:
+        # Skip unrecognized steps (e.g., filter/check steps in email-triggered
+        # workflows) instead of failing — the gmail_query handles filtering.
         return {
-            "status": "error",
+            "status": "success",
             "action": action_type,
-            "details": {"error": f"Unknown action type: {action_type}"},
+            "details": {"skipped": True, "reason": f"No executor for action type: {action_type}"},
         }
 
     action_info = ACTION_MAP[canonical]
     tool = action_info["tool"]
 
+    # Pass action_config into context so AI can see saved values
+    gen_context = dict(context)
+    if action_config:
+        gen_context["_action_config"] = action_config
+
     # Generate params from AI
-    params = await _generate_params(tool, step_description, workflow_name, context)
+    params = await _generate_params(tool, step_description, workflow_name, gen_context)
 
     if not params:
         return {
