@@ -5,7 +5,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from croniter import croniter
+try:
+    from croniter import croniter
+except ImportError:
+    croniter = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ def compute_next_run(
     """
     from zoneinfo import ZoneInfo
 
-    if not cron_expr or not croniter.is_valid(cron_expr):
+    if not cron_expr or croniter is None or not croniter.is_valid(cron_expr):
         return None
 
     try:
@@ -59,6 +62,10 @@ async def scheduler_loop() -> None:
     from app.models.workflow import Workflow
     from app.models.activity_log import ActivityLog
     from app.services.workflow_runner import run_workflow
+
+    if croniter is None:
+        logger.warning("croniter not installed — scheduler disabled")
+        return
 
     # Brief startup delay to let the app finish initializing
     await asyncio.sleep(5)
