@@ -265,6 +265,20 @@ async def execute_step(
                 continue  # Skip non-ISO times — AI generated proper timestamps
             params[key] = value
 
+    # Resolve "self"/"myself"/"me"/"owner" recipients to actual owner email
+    if canonical == "send_email" and "recipient" in params:
+        recip = params["recipient"]
+        if isinstance(recip, str):
+            recip_lower = recip.lower().strip()
+        elif isinstance(recip, list):
+            recip_lower = recip[0].lower().strip() if recip else ""
+        else:
+            recip_lower = ""
+        if recip_lower in ("self", "myself", "me", "owner", "the owner", ""):
+            owner = context.get("owner_email") or context.get("client_email")
+            if owner:
+                params["recipient"] = owner
+
     try:
         if canonical == "send_email":
             result = send_email(db, params["recipient"], params["subject"], params["body"])
