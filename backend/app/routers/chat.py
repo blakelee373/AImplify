@@ -242,10 +242,19 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if signals["workflow_confirmed"]:
         # Safety check: if a workflow already exists for this conversation,
         # the AI probably meant to edit it, not create a duplicate.
+        # BUT if a new draft exists with a DIFFERENT name, the user wants
+        # a second workflow — don't redirect to edit.
         existing_wf = db.query(Workflow).filter(
             Workflow.conversation_id == conversation.id
         ).first()
-        if existing_wf:
+        pending_draft = _find_latest_draft(db, conversation.id)
+        is_new_workflow = (
+            pending_draft
+            and existing_wf
+            and pending_draft.get("name", "").lower().strip()
+            != existing_wf.name.lower().strip()
+        )
+        if existing_wf and not is_new_workflow:
             # Redirect to edit flow instead of creating a duplicate
             current_steps = [
                 {
