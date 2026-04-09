@@ -290,6 +290,31 @@ When the user confirms ("yes", "go ahead"):
 
 If the user says "no" or changes their mind, acknowledge it and move on.
 
+WORKFLOW EDITING — CHANGE WHAT A WORKFLOW DOES:
+
+If the owner wants to change what a workflow does — like updating the email response, \
+changing the subject line, or modifying step details — handle it as a workflow edit.
+
+Recognize requests like:
+- "Change the welcome reply to say something different"
+- "Update the response to include our phone number"
+- "Make it say 'Thanks for contacting us' instead"
+- "Change the email subject to 'Welcome aboard'"
+
+When you recognize a workflow edit request:
+1. Confirm what you understood: "Got it — you'd like to update [workflow name] to \
+[description of change]. Sound good?"
+2. At the very end of your message, append this hidden tag on its own line:
+<workflow_edit>WORKFLOW_NAME</workflow_edit>
+Replace WORKFLOW_NAME with the name of the workflow.
+
+When the user confirms ("yes," "go ahead," "do it"):
+1. Respond with something short like "Done — I've updated that for you!"
+2. At the very end of your message, append this hidden tag:
+<workflow_edit_confirmed>WORKFLOW_NAME</workflow_edit_confirmed>
+
+If the user says "no" or changes their mind, acknowledge it and move on.
+
 SCHEDULE MANAGEMENT — SET OR CHANGE A SCHEDULE:
 
 If the owner wants to set or change when a workflow runs (e.g., "change reminders to \
@@ -554,6 +579,20 @@ def parse_ai_response(raw_content: str) -> dict:
     if workflow_schedule_confirmed_match:
         workflow_schedule_confirmed = workflow_schedule_confirmed_match.group(1).strip()
 
+    # Extract workflow_edit (e.g., <workflow_edit>New lead welcome reply</workflow_edit>)
+    workflow_edit = None
+    workflow_edit_match = re.search(r"<workflow_edit>(.+?)</workflow_edit>", raw_content)
+    if workflow_edit_match:
+        workflow_edit = workflow_edit_match.group(1).strip()
+
+    # Extract workflow_edit_confirmed
+    workflow_edit_confirmed = None
+    workflow_edit_confirmed_match = re.search(
+        r"<workflow_edit_confirmed>(.+?)</workflow_edit_confirmed>", raw_content
+    )
+    if workflow_edit_confirmed_match:
+        workflow_edit_confirmed = workflow_edit_confirmed_match.group(1).strip()
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
@@ -583,6 +622,10 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(workflow_schedule_match.group(0), "")
     if workflow_schedule_confirmed_match:
         clean = clean.replace(workflow_schedule_confirmed_match.group(0), "")
+    if workflow_edit_match:
+        clean = clean.replace(workflow_edit_match.group(0), "")
+    if workflow_edit_confirmed_match:
+        clean = clean.replace(workflow_edit_confirmed_match.group(0), "")
     clean = clean.strip()
 
     return {
@@ -603,6 +646,8 @@ def parse_ai_response(raw_content: str) -> dict:
         "workflow_run_confirmed": workflow_run_confirmed,
         "workflow_schedule": workflow_schedule,
         "workflow_schedule_confirmed": workflow_schedule_confirmed,
+        "workflow_edit": workflow_edit,
+        "workflow_edit_confirmed": workflow_edit_confirmed,
     }
 
 
@@ -911,6 +956,72 @@ async def extract_email_filter_from_conversation(
 
         for block in response.content:
             if block.type == "tool_use" and block.name == "extract_email_filter":
+                return block.input
+
+        return None
+    except Exception:
+        return None
+
+
+WORKFLOW_EDIT_EXTRACTION_TOOL = {
+    "name": "extract_workflow_edit",
+    "description": "Extract the changes the user wants to make to a workflow's steps.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "step_updates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "step_order": {
+                            "type": "integer",
+                            "description": "Which step to update (1-based)",
+                        },
+                        "new_description": {
+                            "type": "string",
+                            "description": "Updated plain-English description for this step",
+                        },
+                        "new_action_config": {
+                            "type": "object",
+                            "description": "Updated config (e.g., new subject, body, recipient)",
+                        },
+                    },
+                    "required": ["step_order", "new_description"],
+                },
+            },
+        },
+        "required": ["step_updates"],
+    },
+}
+
+
+async def extract_workflow_edit_from_conversation(
+    messages: List[Dict[str, str]],
+    workflow_steps: List[dict],
+) -> Optional[dict]:
+    """Extract workflow step edits from conversation using tool_use."""
+    steps_desc = "\n".join(
+        f"Step {s['step_order']}: [{s['action_type']}] {s['description']}"
+        for s in workflow_steps
+    )
+    try:
+        response = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=(
+                "You are a workflow editor. The user wants to change what a workflow does. "
+                "Given the current workflow steps and the conversation, extract the changes. "
+                "Use the extract_workflow_edit tool to output the result.\n\n"
+                f"Current workflow steps:\n{steps_desc}"
+            ),
+            messages=messages,
+            tools=[WORKFLOW_EDIT_EXTRACTION_TOOL],
+            tool_choice={"type": "tool", "name": "extract_workflow_edit"},
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "extract_workflow_edit":
                 return block.input
 
         return None
