@@ -413,6 +413,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 # Extract the new schedule from the conversation
                 schedule_data = await extract_schedule_from_conversation(messages, timezone=tz)
                 if schedule_data:
+                    # Capture old schedule text before overwriting
+                    old_schedule_text = (wf.trigger_config or {}).get("schedule", "")
+
                     # Update trigger_config
                     new_config = dict(wf.trigger_config or {})
                     new_config["cron_expression"] = schedule_data["cron_expression"]
@@ -422,6 +425,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     wf.trigger_config = new_config
                     wf.trigger_type = "schedule"
                     wf.updated_at = datetime.now(timezone.utc)
+
+                    # Update description to reflect the new schedule
+                    if wf.description and old_schedule_text:
+                        wf.description = wf.description.replace(
+                            old_schedule_text, schedule_data["schedule_description"]
+                        )
 
                     # Recompute next_run_at
                     from app.services.scheduler import update_next_run
