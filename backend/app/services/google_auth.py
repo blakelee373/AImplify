@@ -39,7 +39,15 @@ def get_google_credentials(db: Session, provider: str) -> Optional[Credentials]:
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     if expiry and expiry < now_utc:
         if creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception:
+                # Refresh token revoked or expired (common in Google "Testing"
+                # mode where tokens last only 7 days). Mark as disconnected so
+                # the user is prompted to reconnect.
+                integration.status = "expired"
+                db.commit()
+                return None
             # Update stored tokens with fresh ones
             integration.access_token = encrypt_token(creds.token)
             integration.token_expiry = creds.expiry
