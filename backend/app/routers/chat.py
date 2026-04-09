@@ -589,18 +589,26 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 }
                 for s in sorted(matched.steps, key=lambda x: x.step_order)
             ]
-            # Extract proposed changes so the card shows the UPDATED steps
-            edit_preview = await extract_workflow_edit_from_conversation(
-                messages, current_steps
-            )
-            preview_steps = list(current_steps)  # copy
-            if edit_preview and edit_preview.get("step_updates"):
-                for update in edit_preview["step_updates"]:
-                    for step in preview_steps:
-                        if step["step_order"] == update.get("step_order"):
-                            if update.get("new_description"):
-                                step["description"] = update["new_description"]
-                            break
+            # Extract proposed changes so the card shows the UPDATED steps.
+            # Include the AI's latest response so the extractor has full context
+            # about what the user asked to change.
+            preview_messages = messages + [{"role": "assistant", "content": clean_content}]
+            preview_steps = None
+            try:
+                edit_preview = await extract_workflow_edit_from_conversation(
+                    preview_messages, current_steps
+                )
+                if edit_preview and edit_preview.get("step_updates"):
+                    import copy
+                    preview_steps = copy.deepcopy(current_steps)
+                    for update in edit_preview["step_updates"]:
+                        for step in preview_steps:
+                            if step["step_order"] == update.get("step_order"):
+                                if update.get("new_description"):
+                                    step["description"] = update["new_description"]
+                                break
+            except Exception:
+                pass
             metadata = {
                 "message_type": "workflow_edit_request",
                 "workflow_id": matched.id,
