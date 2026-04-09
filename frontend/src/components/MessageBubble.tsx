@@ -282,7 +282,7 @@ export function MessageBubble({ role, content, metadata, onConnectTool }: Messag
               )}
               {metadata.next_run_at && (
                 <div className="text-xs text-green-600 mt-1">
-                  Next run: {new Date(metadata.next_run_at).toLocaleString(undefined, {
+                  Next run: {new Date(metadata.next_run_at.endsWith("Z") || metadata.next_run_at.includes("+") ? metadata.next_run_at : metadata.next_run_at + "Z").toLocaleString(undefined, {
                     weekday: "short",
                     month: "short",
                     day: "numeric",
