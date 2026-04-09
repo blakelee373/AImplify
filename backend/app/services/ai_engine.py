@@ -450,7 +450,10 @@ IMPORTANT — When trigger_type is "event" and event_type is "email_received":
 "when I get a booking confirmation" → "subject:booking confirmation is:unread"
 - Always include "is:unread" to prevent re-processing.
 - Set trigger_config.frequency to "on_event".
-- Set trigger_config.description to a plain-English description of the email filter.\
+- Set trigger_config.description to a plain-English description of the email filter.
+- CRITICAL: Do NOT create "check" or "filter" steps in the workflow (like "check_email_subject"). \
+The gmail_query already handles filtering — only include ACTION steps (send_email, create_event, etc.). \
+For reply workflows, use action_type "send_email" with a description like "Send welcome reply to the sender".\
 """
 
 

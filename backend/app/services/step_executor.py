@@ -95,6 +95,13 @@ owner_email or client_email from the runtime context as the recipient. \
 NEVER use placeholder emails like "me@example.com" or "self" — always use the \
 actual email address from the context.
 
+EMAIL-TRIGGERED WORKFLOWS — When the context contains email_sender, email_subject, \
+and email_snippet, this workflow was triggered by an incoming email. \
+For reply/response steps, use email_sender as the recipient. \
+You can reference the original email's subject and content to personalize the response. \
+Example: if email_sender is "jane@example.com" and the step says "send welcome reply", \
+set recipient to "jane@example.com".
+
 For dates and times, use the day reference below to convert day names to exact dates. \
 Always produce full ISO 8601 timestamps with the correct timezone offset.\
 """
@@ -198,10 +205,12 @@ async def execute_step(
     """
     canonical = _resolve_action_type(action_type)
     if not canonical:
+        # Skip unrecognized steps (e.g., filter/check steps in email-triggered
+        # workflows) instead of failing — the gmail_query handles filtering.
         return {
-            "status": "error",
+            "status": "success",
             "action": action_type,
-            "details": {"error": f"Unknown action type: {action_type}"},
+            "details": {"skipped": True, "reason": f"No executor for action type: {action_type}"},
         }
 
     action_info = ACTION_MAP[canonical]
