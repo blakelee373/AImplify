@@ -33,7 +33,8 @@ export function timeAgo(iso: string): string {
 }
 
 export function formatNextRun(iso: string): string {
-  const date = new Date(iso);
+  // next_run_at is stored as UTC — append Z if missing so JS parses it correctly
+  const date = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
   const now = new Date();
   const diffMs = date.getTime() - now.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
