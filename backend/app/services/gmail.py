@@ -1,6 +1,7 @@
 """Gmail integration — send emails through the user's connected Google account."""
 
 import base64
+import re
 from email.mime.text import MIMEText
 from typing import List, Optional, Union
 
@@ -8,6 +9,40 @@ from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
 
 from app.services.google_auth import get_google_credentials
+
+# Matches a bare email or "Name <email>" format
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+def _clean_recipient(value: str) -> str:
+    """Extract a valid email address from a possibly messy recipient string.
+
+    Handles cases where the AI returns a name, "Name <email>", or other noise.
+    Raises ValueError if no valid email can be found.
+    """
+    value = value.strip()
+    if not value:
+        raise ValueError("Empty recipient email address")
+    # Already a clean email
+    if _EMAIL_RE.fullmatch(value):
+        return value
+    # Try to extract email from "Name <email>" or other formats
+    match = _EMAIL_RE.search(value)
+    if match:
+        return match.group(0)
+    raise ValueError(f"Invalid recipient email address: {value}")
+
+
+def _clean_recipient_list(recipients: Union[str, List[str]]) -> str:
+    """Normalize recipient(s) to a clean comma-separated string of valid emails."""
+    if isinstance(recipients, str):
+        # Could be comma-separated
+        parts = [r.strip() for r in recipients.split(",") if r.strip()]
+    else:
+        parts = [r for r in recipients if r and str(r).strip()]
+    if not parts:
+        raise ValueError("No recipient email addresses provided")
+    return ", ".join(_clean_recipient(str(p)) for p in parts)
 
 
 def send_email(
@@ -33,20 +68,17 @@ def send_email(
 
     service = build("gmail", "v1", credentials=creds)
 
-    # Normalize to comma-separated strings
-    if isinstance(recipient, list):
-        to_str = ", ".join(recipient)
-    else:
-        to_str = recipient
+    # Clean and validate all recipient addresses
+    to_str = _clean_recipient_list(recipient)
 
     message = MIMEText(body)
     message["to"] = to_str
     message["subject"] = subject
 
     if cc:
-        message["cc"] = ", ".join(cc) if isinstance(cc, list) else cc
+        message["cc"] = _clean_recipient_list(cc)
     if bcc:
-        message["bcc"] = ", ".join(bcc) if isinstance(bcc, list) else bcc
+        message["bcc"] = _clean_recipient_list(bcc)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
 

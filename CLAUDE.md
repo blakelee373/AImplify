@@ -4,6 +4,7 @@
 - **NEVER merge PRs to main.** Only the owner merges. Claude creates branches and PRs — that's it.
 - **NEVER run `gh pr merge`.** The only exception is database migrations and schema changes — those can be merged automatically.
 - When the user wants to test a PR branch, run the backend on that branch instead of merging.
+- **Auto-restart backend:** After pushing backend changes, automatically kill the running uvicorn process and restart it (`cd backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000`). The user has granted standing permission for this.
 
 ## Product
 AI operations layer for medspas. Owners describe how their business works in plain conversation, and AImplify builds AI agents to automate repetitive tasks.
@@ -56,12 +57,40 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - `extract_email_filter_from_conversation()` in `ai_engine.py` is scaffolding for future email filter editing
 - SQLite strips timezone info from datetimes — always treat naive `last_run_at` as UTC when converting to epoch
 
+## Calendar-Based Triggers
+- Background calendar watcher runs as an asyncio task in FastAPI lifespan, polling Google Calendar every 60s
+- Two event types: `calendar_event_created` (new/modified events via `updatedMin`) and `calendar_event_starting` (upcoming events within lead time window)
+- `trigger_config.calendar_filter` stores matching criteria: `summary_contains`, `attendee_email`, `description_contains`, `min_duration_minutes`
+- `trigger_config.lead_time_minutes` for "starting" type (default 30 minutes)
+- Empty `calendar_filter` matches all events — only add filter fields the owner explicitly describes
+- Calendar context (summary, start, end, attendees, description) is injected into workflow step execution
+- Same dedup pattern as email watcher: in-memory `OrderedDict` keyed by `event_id`, capped at 200 per workflow
+- `_matches_calendar_filter()` uses AND logic — all specified criteria must match
+- System prompt guides owners through describing calendar triggers in plain language with two paths: new events vs. reminders before events
+- For `calendar_event_created`: `last_run_at` used as `updatedMin` with 60s overlap buffer
+- For `calendar_event_starting`: polls events starting within `now` to `now + lead_time_minutes`
+- All-day events (date-only, no dateTime) are handled by `_parse_event_detail`; `singleEvents=True` expands recurring events
+
 ## Workflow Editing
 - `workflow_edit` / `workflow_edit_confirmed` signal tags let owners change step content via chat
 - Edit handler prefers the workflow linked to the current conversation (by `conversation_id`) over name matching — prevents editing the wrong workflow when names are duplicated
-- If AI mistakenly uses `workflow_confirmed` in a conversation that already has a workflow, backend redirects to edit flow instead of creating a duplicate
+- If AI mistakenly uses `workflow_confirmed` in a conversation that already has a workflow, backend redirects to edit flow — UNLESS the pending draft has a different name (user is creating a second workflow in the same conversation)
+- Edit flow supports both updating existing steps (`step_updates`) and adding new steps (`new_steps`) via `WORKFLOW_EDIT_EXTRACTION_TOOL`
+- Edit confirmation card does NOT show steps — the AI's text describes the changes; showing old steps was misleading
 - Step executor passes `action_config` into the AI param generator prompt so saved subject/body values are used
 - Unknown action types (e.g., `check_email_subject`) are skipped as no-ops instead of failing the workflow
+
+## Step Execution
+- `run_workflow` injects `timezone` and `owner_email` into context as fallbacks when not provided by the trigger — ensures manual runs work correctly
+- Step executor resolves literal `"self"`, `"myself"`, `"me"`, `"owner"` recipients to the actual `owner_email` in code — does not rely on the AI to do this
+- `action_config` merge skips any `start_time`/`end_time` that isn't a full ISO 8601 timestamp (must start with `YYYY-MM-DDT`) — prevents bare times like `"2:00 PM"` from overwriting AI-generated timestamps
+- `EVENT_PARAMS_TOOL` examples use timezone offset format (`-04:00`), NOT `Z`/UTC — the AI copies the example format
+- `gmail.py` validates and cleans email addresses before sending — extracts valid email from `"Name <email>"` format, rejects empty/invalid values with clear error messages
+
+## Action Detection Guards
+- `_detect_action_from_content` only checks confirmation phrases in the last ~200 chars and skips if the response ends with an info-gathering question (what/who/which/where + ?)
+- Before the `action_request` handler, if the response ends with an info-gathering question, `action_request_type` is nulled — prevents premature confirmation cards from both explicit tags and content-based fallbacks
+- When adding new AI capabilities, update `PROVIDER_DISPLAY` capabilities string — the connection status assertively tells the AI what it CAN do, and omissions cause the AI to claim it can't
 
 ## Tool Connection System
 - Connection status is dynamic in the system prompt — built by `_build_connection_status()` from actual DB state

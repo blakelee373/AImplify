@@ -242,10 +242,19 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if signals["workflow_confirmed"]:
         # Safety check: if a workflow already exists for this conversation,
         # the AI probably meant to edit it, not create a duplicate.
+        # BUT if a new draft exists with a DIFFERENT name, the user wants
+        # a second workflow — don't redirect to edit.
         existing_wf = db.query(Workflow).filter(
             Workflow.conversation_id == conversation.id
         ).first()
-        if existing_wf:
+        pending_draft = _find_latest_draft(db, conversation.id)
+        is_new_workflow = (
+            pending_draft
+            and existing_wf
+            and pending_draft.get("name", "").lower().strip()
+            != existing_wf.name.lower().strip()
+        )
+        if existing_wf and not is_new_workflow:
             # Redirect to edit flow instead of creating a duplicate
             current_steps = [
                 {
@@ -295,13 +304,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         if not metadata:
             draft = _find_latest_draft(db, conversation.id)
             if draft:
-                # Inject the user's timezone into schedule trigger config so cron
-                # fires at the right local time (not UTC)
-                if draft.get("trigger_type") == "schedule":
-                    tc = draft.get("trigger_config") or {}
-                    if "timezone" not in tc:
-                        tc["timezone"] = tz
-                        draft["trigger_config"] = tc
+                # Inject the user's timezone into trigger config so steps
+                # generate timestamps in the correct local time
+                tc = draft.get("trigger_config") or {}
+                if "timezone" not in tc:
+                    tc["timezone"] = tz
+                    draft["trigger_config"] = tc
                 workflow = create_workflow_from_draft(db, draft, conversation.id)
                 metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
 
@@ -581,18 +589,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         if not matched:
             matched = match_workflow_by_name(all_workflows, wf_name)
         if matched:
+            # Don't include steps — the AI's text already describes the
+            # proposed changes, and showing old step text is misleading.
             metadata = {
                 "message_type": "workflow_edit_request",
                 "workflow_id": matched.id,
                 "workflow_name": matched.name,
-                "steps": [
-                    {
-                        "step_order": s.step_order,
-                        "action_type": s.action_type,
-                        "description": s.description or s.action_type,
-                    }
-                    for s in sorted(matched.steps, key=lambda x: x.step_order)
-                ],
             }
         else:
             metadata = {
@@ -633,9 +635,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 edit_data = await extract_workflow_edit_from_conversation(
                     messages, current_steps
                 )
-                if edit_data and edit_data.get("step_updates"):
+                has_updates = edit_data and edit_data.get("step_updates")
+                has_new = edit_data and edit_data.get("new_steps")
+                if has_updates or has_new:
                     from app.models.workflow import WorkflowStep
-                    for update in edit_data["step_updates"]:
+
+                    # Update existing steps
+                    for update in (edit_data.get("step_updates") or []):
                         step = db.query(WorkflowStep).filter(
                             WorkflowStep.workflow_id == wf.id,
                             WorkflowStep.step_order == update["step_order"],
@@ -645,12 +651,31 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                             if update.get("new_action_config"):
                                 step.action_config = update["new_action_config"]
 
+                    # Add new steps
+                    if has_new:
+                        max_order = max(
+                            (s.step_order for s in wf.steps), default=0
+                        )
+                        for new_step in edit_data["new_steps"]:
+                            max_order += 1
+                            db.add(WorkflowStep(
+                                workflow_id=wf.id,
+                                step_order=max_order,
+                                action_type=new_step.get("action_type", "unknown"),
+                                action_config=new_step.get("action_config"),
+                                description=new_step.get("description"),
+                            ))
+
                     wf.updated_at = datetime.now(timezone.utc)
                     log_entry = ActivityLog(
                         workflow_id=wf.id,
                         action_type="workflow_edited",
                         description=f"Steps updated for '{wf.name}' via chat",
-                        details={"updates": edit_data["step_updates"], "source": "chat"},
+                        details={
+                            "updates": edit_data.get("step_updates", []),
+                            "new_steps": edit_data.get("new_steps", []),
+                            "source": "chat",
+                        },
                     )
                     db.add(log_entry)
                     db.commit()
@@ -717,6 +742,17 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     "message_type": "connect_tool",
                     "provider": required_provider,
                 }
+
+    # Suppress action_request if the AI is still asking for information.
+    # The AI sometimes emits <action_request> prematurely while still gathering
+    # fields (e.g., asking "what's your email address?"). If the response ends
+    # with an info-gathering question, drop the action request.
+    if action_request_type and not metadata:
+        _last = clean_content.rsplit(".", 1)[-1].strip().lower() or clean_content.lower()
+        if _last.endswith("?") and _re.search(
+            r"\b(what('?s)?|who|which|where|how much|how many)\b", _last
+        ):
+            action_request_type = None
 
     if action_request_type and not metadata:
         # Check if the required tool is connected before proceeding
@@ -998,13 +1034,30 @@ def _detect_action_from_content(content: str) -> Optional[str]:
     """
     lower = content.lower()
 
-    # Must end with a confirmation question
+    # If the response ends with a question gathering information (what, who,
+    # which, where, how), it's still collecting fields — NOT confirming.
+    # Only the LAST sentence matters; confirmation phrases earlier in the
+    # response (e.g., recapping "you want me to...") are not confirmation.
+    last_sentence = lower.rsplit(".", 1)[-1].strip()
+    if not last_sentence:
+        last_sentence = lower
+    info_gathering = _re.search(
+        r"\b(what('?s)?|who|which|where|how much|how many|what address|what email)\b",
+        last_sentence,
+    )
+    if info_gathering and last_sentence.rstrip().endswith("?"):
+        return None
+
+    # Must contain a confirmation question
+    # Check only the tail end of the response (last ~200 chars) to avoid
+    # matching recap phrases like "you mentioned you want me to..."
+    tail = lower[-200:] if len(lower) > 200 else lower
     confirmation_phrases = [
         "sound good", "want me to", "shall i", "go ahead",
         "ready to", "look right", "look correct", "that right",
         "does that work", "want me to go", "should i",
     ]
-    has_confirmation = any(phrase in lower for phrase in confirmation_phrases)
+    has_confirmation = any(phrase in tail for phrase in confirmation_phrases)
     if not has_confirmation:
         return None
 

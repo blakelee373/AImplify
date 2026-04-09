@@ -9,6 +9,7 @@ from app.database import init_db
 from app.routers import health, chat, workflows, integrations, actions
 from app.services.scheduler import scheduler_loop
 from app.services.email_watcher import email_watcher_loop
+from app.services.calendar_watcher import calendar_watcher_loop
 
 
 @asynccontextmanager
@@ -19,9 +20,12 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(scheduler_loop())
     # Start the email watcher for event-based triggers (Gmail polling)
     email_task = asyncio.create_task(email_watcher_loop())
+    # Start the calendar watcher for event-based triggers (Calendar polling)
+    calendar_task = asyncio.create_task(calendar_watcher_loop())
     yield
     scheduler_task.cancel()
     email_task.cancel()
+    calendar_task.cancel()
 
 
 app = FastAPI(title="AImplify API", version="0.1.0", lifespan=lifespan)

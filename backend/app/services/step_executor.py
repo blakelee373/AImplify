@@ -47,11 +47,11 @@ EVENT_PARAMS_TOOL = {
             },
             "start_time": {
                 "type": "string",
-                "description": "ISO 8601 start time (e.g., '2026-04-10T14:00:00Z')",
+                "description": "ISO 8601 start time with timezone offset (e.g., '2026-04-10T14:00:00-04:00'). MUST include the timezone offset from the runtime context, NOT Z/UTC.",
             },
             "end_time": {
                 "type": "string",
-                "description": "ISO 8601 end time (e.g., '2026-04-10T15:00:00Z')",
+                "description": "ISO 8601 end time with timezone offset (e.g., '2026-04-10T15:00:00-04:00'). MUST include the timezone offset from the runtime context, NOT Z/UTC.",
             },
             "description": {
                 "type": "string",
@@ -106,6 +106,13 @@ For reply/response steps, use email_sender as the recipient. \
 You can reference the original email's subject and content to personalize the response. \
 Example: if email_sender is "jane@example.com" and the step says "send welcome reply", \
 set recipient to "jane@example.com".
+
+CALENDAR-TRIGGERED WORKFLOWS — When the context contains calendar_event_summary, \
+calendar_event_start, and calendar_event_end, this workflow was triggered by a calendar event. \
+For notification/email steps, reference the event details to personalize the message. \
+calendar_event_attendees contains a comma-separated list of attendee emails. \
+Example: if calendar_event_summary is "Consultation with Jane" and calendar_event_start \
+is "2026-04-10T14:00:00-05:00", include the event title and formatted time in the email body.
 
 For dates and times, use the day reference below to convert day names to exact dates. \
 Always produce full ISO 8601 timestamps with the correct timezone offset.\
@@ -244,17 +251,33 @@ async def execute_step(
             "details": {"error": "Failed to generate parameters for this step"},
         }
 
-    # Merge action_config, but skip bare time strings (HH:MM) that would
-    # overwrite the AI's proper ISO 8601 timestamps for calendar events.
+    # Merge action_config, but skip time values that aren't full ISO 8601
+    # timestamps — the AI generates proper timestamps and bare times like
+    # "2:00 PM" or "14:00" from action_config would overwrite them.
     if action_config:
         import re as _merge_re
-        bare_time_pattern = _merge_re.compile(r"^\d{1,2}:\d{2}$")
+        iso_pattern = _merge_re.compile(r"^\d{4}-\d{2}-\d{2}T")
+        skip_keys = {"duration_minutes", "duration", "title"}
         for key, value in action_config.items():
-            if key in ("start_time", "end_time") and isinstance(value, str) and bare_time_pattern.match(value):
-                continue  # Skip — AI generated a full ISO timestamp
-            if key in ("duration_minutes",):
+            if key in skip_keys:
                 continue  # Internal metadata, not an API parameter
+            if key in ("start_time", "end_time") and isinstance(value, str) and not iso_pattern.match(value):
+                continue  # Skip non-ISO times — AI generated proper timestamps
             params[key] = value
+
+    # Resolve "self"/"myself"/"me"/"owner" recipients to actual owner email
+    if canonical == "send_email" and "recipient" in params:
+        recip = params["recipient"]
+        if isinstance(recip, str):
+            recip_lower = recip.lower().strip()
+        elif isinstance(recip, list):
+            recip_lower = recip[0].lower().strip() if recip else ""
+        else:
+            recip_lower = ""
+        if recip_lower in ("self", "myself", "me", "owner", "the owner", ""):
+            owner = context.get("owner_email") or context.get("client_email")
+            if owner:
+                params["recipient"] = owner
 
     try:
         if canonical == "send_email":

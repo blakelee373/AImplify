@@ -19,6 +19,30 @@ async def run_workflow(
     context: runtime data like {"client_name": "Jane", "client_email": "jane@example.com"}
     Returns a list of step results.
     """
+    # Ensure timezone is always in context — pull from trigger_config if missing
+    if "timezone" not in context:
+        wf_tz = (workflow.trigger_config or {}).get("timezone")
+        if wf_tz:
+            context["timezone"] = wf_tz
+
+    # Ensure owner_email is in context so "send to myself" resolves correctly
+    if "owner_email" not in context:
+        try:
+            from app.services.google_auth import get_google_credentials
+            from googleapiclient.discovery import build as goog_build
+
+            creds = get_google_credentials(db, provider="gmail")
+            if creds:
+                service = goog_build("gmail", "v1", credentials=creds)
+                profile = service.users().getProfile(userId="me").execute()
+                email = profile.get("emailAddress")
+                if email:
+                    context["owner_email"] = email
+                    if "client_email" not in context:
+                        context["client_email"] = email
+        except Exception:
+            pass
+
     results = []
 
     for step in workflow.steps:

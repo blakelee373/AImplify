@@ -152,6 +152,74 @@ def list_upcoming_events(
     return events
 
 
+def _parse_event_detail(item: dict) -> dict:
+    """Extract full event details from a Google Calendar API event item."""
+    start = item["start"].get("dateTime", item["start"].get("date"))
+    end = item["end"].get("dateTime", item["end"].get("date"))
+    attendees = [
+        a["email"] for a in item.get("attendees", []) if "email" in a
+    ]
+    return {
+        "event_id": item["id"],
+        "summary": item.get("summary", "(No title)"),
+        "start": start,
+        "end": end,
+        "description": item.get("description", ""),
+        "attendees": attendees,
+        "link": item.get("htmlLink"),
+        "updated": item.get("updated"),
+    }
+
+
+def list_recently_modified_events(
+    db: Session,
+    updated_min: str,
+    time_min: Optional[str] = None,
+    max_results: int = 25,
+) -> List[dict]:
+    """Return events modified since updated_min (ISO 8601).
+
+    Used by the calendar watcher to detect new/changed events.
+    """
+    service = _get_calendar_service(db)
+
+    now = datetime.now(timezone.utc).isoformat()
+    result = service.events().list(
+        calendarId="primary",
+        updatedMin=updated_min,
+        timeMin=time_min or now,
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+
+    return [_parse_event_detail(item) for item in result.get("items", [])]
+
+
+def list_events_starting_between(
+    db: Session,
+    time_min: str,
+    time_max: str,
+    max_results: int = 25,
+) -> List[dict]:
+    """Return events starting within a time window.
+
+    Used by the calendar watcher for 'N minutes before' triggers.
+    """
+    service = _get_calendar_service(db)
+
+    result = service.events().list(
+        calendarId="primary",
+        timeMin=time_min,
+        timeMax=time_max,
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+
+    return [_parse_event_detail(item) for item in result.get("items", [])]
+
+
 def check_availability(
     db: Session,
     start_time: str,
