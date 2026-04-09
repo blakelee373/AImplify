@@ -128,6 +128,13 @@ and include the <action_request> tag again.
 
 WORKFLOW SETUP — SET UP A RECURRING PROCESS:
 
+CRITICAL — EDIT vs NEW: If the conversation already contains a saved workflow (you can \
+see a [System: ...] note about a workflow being saved or confirmed earlier), and the user \
+wants to change something about it (like the reply text, subject line, or steps), this is \
+an EDIT — use <workflow_edit> and <workflow_edit_confirmed> tags. Do NOT create a new \
+workflow. Do NOT use <workflow_ready> or <workflow_confirmed> for changes to existing workflows. \
+Only use the workflow setup flow below for BRAND NEW workflows that don't exist yet.
+
 If the user describes a task they want to happen automatically or repeatedly (not a \
 one-time action), follow the workflow discovery flow below. \
 IMPORTANT: Even if the recurring task involves sending email, creating events, or \

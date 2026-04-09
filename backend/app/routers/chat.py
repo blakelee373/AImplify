@@ -240,18 +240,70 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             metadata = {"message_type": "workflow_summary", "workflow_draft": draft}
 
     if signals["workflow_confirmed"]:
-        # Find the most recent workflow draft in this conversation
-        draft = _find_latest_draft(db, conversation.id)
-        if draft:
-            # Inject the user's timezone into schedule trigger config so cron
-            # fires at the right local time (not UTC)
-            if draft.get("trigger_type") == "schedule":
-                tc = draft.get("trigger_config") or {}
-                if "timezone" not in tc:
-                    tc["timezone"] = tz
-                    draft["trigger_config"] = tc
-            workflow = create_workflow_from_draft(db, draft, conversation.id)
-            metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
+        # Safety check: if a workflow already exists for this conversation,
+        # the AI probably meant to edit it, not create a duplicate.
+        existing_wf = db.query(Workflow).filter(
+            Workflow.conversation_id == conversation.id
+        ).first()
+        if existing_wf:
+            # Redirect to edit flow instead of creating a duplicate
+            current_steps = [
+                {
+                    "step_order": s.step_order,
+                    "action_type": s.action_type,
+                    "description": s.description or s.action_type,
+                }
+                for s in sorted(existing_wf.steps, key=lambda x: x.step_order)
+            ]
+            edit_data = await extract_workflow_edit_from_conversation(
+                messages, current_steps
+            )
+            if edit_data and edit_data.get("step_updates"):
+                from app.models.workflow import WorkflowStep
+                for update in edit_data["step_updates"]:
+                    step = db.query(WorkflowStep).filter(
+                        WorkflowStep.workflow_id == existing_wf.id,
+                        WorkflowStep.step_order == update["step_order"],
+                    ).first()
+                    if step:
+                        step.description = update.get("new_description", step.description)
+                        if update.get("new_action_config"):
+                            step.action_config = update["new_action_config"]
+
+                existing_wf.updated_at = datetime.now(timezone.utc)
+                log_entry = ActivityLog(
+                    workflow_id=existing_wf.id,
+                    action_type="workflow_edited",
+                    description=f"Steps updated for '{existing_wf.name}' via chat",
+                    details={"updates": edit_data["step_updates"], "source": "chat"},
+                )
+                db.add(log_entry)
+                db.commit()
+                metadata = {
+                    "message_type": "workflow_edit_result",
+                    "success": True,
+                    "workflow_name": existing_wf.name,
+                }
+            else:
+                metadata = {
+                    "message_type": "workflow_edit_result",
+                    "success": False,
+                    "workflow_name": existing_wf.name,
+                    "error": "Could not understand the changes.",
+                }
+        # No existing workflow — proceed with normal creation
+        if not metadata:
+            draft = _find_latest_draft(db, conversation.id)
+            if draft:
+                # Inject the user's timezone into schedule trigger config so cron
+                # fires at the right local time (not UTC)
+                if draft.get("trigger_type") == "schedule":
+                    tc = draft.get("trigger_config") or {}
+                    if "timezone" not in tc:
+                        tc["timezone"] = tz
+                        draft["trigger_config"] = tc
+                workflow = create_workflow_from_draft(db, draft, conversation.id)
+                metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
 
     # ── Workflow queries (list, status, activity, run) ────────────────
     # These must be handled BEFORE the action-gathering safety net, which can
