@@ -15,6 +15,7 @@ from app.schemas.chat import (
 )
 from app.models.activity_log import ActivityLog
 from app.models.integration import Integration
+from app.models.memory import BusinessMemory
 from app.models.workflow import Workflow
 from app.services.ai_engine import (
     get_ai_response,
@@ -178,6 +179,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 wf = m.metadata_json.get("workflow", {})
                 logs = m.metadata_json.get("recent_activity", [])
                 content += f"\n\n[System: Status for '{wf.get('name', '')}' was shown — {len(logs)} recent activity entries.]"
+            elif msg_type == "memory_save_request":
+                mem_key = m.metadata_json.get("memory_key", "")
+                content += f"\n\n[System: A confirmation card to save '{mem_key}' to business memory is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <memory_save_confirmed>true</memory_save_confirmed> — " \
+                           "do NOT re-summarize or show another <memory_save>.]"
+            elif msg_type == "memory_save_result":
+                success = m.metadata_json.get("success", False)
+                mem_key = m.metadata_json.get("memory_key", "")
+                if success:
+                    content += f"\n\n[System: '{mem_key}' was saved to business memory successfully.]"
+                else:
+                    content += f"\n\n[System: Failed to save '{mem_key}' to business memory.]"
         messages.append({"role": m.role, "content": content})
 
     # Get AI response and parse for signal tags
@@ -190,6 +203,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         Integration.status == "connected"
     ).all()
     connected_providers = [i.provider for i in connected_integrations]
+
+    # Query business memories for prompt injection (Tier 3)
+    all_memories = db.query(BusinessMemory).order_by(
+        BusinessMemory.category, BusinessMemory.updated_at.desc()
+    ).all()
+    business_memories = [
+        {"category": m.category, "key": m.key, "value": m.value}
+        for m in all_memories
+    ] if all_memories else None
+
+    # Load session context (Tier 2) from the conversation
+    session_context = conversation.session_context
 
     # ── Pre-flight: check if the user's message implies a disconnected tool ──
     # Catches tool needs early — before calling the AI or starting workflow
@@ -226,6 +251,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     raw_content = await get_ai_response(
         messages, timezone=tz, workflow_names=wf_names,
         connected_providers=connected_providers,
+        business_memories=business_memories,
+        session_context=session_context,
     )
     signals = parse_ai_response(raw_content)
     clean_content = signals["clean_content"]
@@ -238,6 +265,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         draft = await extract_workflow_from_conversation(messages)
         if draft:
             metadata = {"message_type": "workflow_summary", "workflow_draft": draft}
+        # Track the current task in session context (Tier 2)
+        if not conversation.session_context:
+            conversation.session_context = {}
+        conversation.session_context["task"] = "setting up a workflow"
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(conversation, "session_context")
 
     if signals["workflow_confirmed"]:
         # Safety check: if a workflow already exists for this conversation,
@@ -933,6 +966,43 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "error": str(e),
             }
 
+    # ── Memory save (suggest saving to business memory) ─────────────────
+    if signals.get("memory_save") and not metadata:
+        mem = signals["memory_save"]
+        metadata = {
+            "message_type": "memory_save_request",
+            "memory_category": mem["category"],
+            "memory_key": mem["key"],
+            "memory_value": mem["value"],
+        }
+    elif signals.get("memory_save") and metadata:
+        # Don't override existing metadata, stash for later
+        metadata["pending_memory"] = signals["memory_save"]
+
+    if signals.get("memory_save_confirmed") and not metadata:
+        prior_memory = _find_latest_memory_request(db, conversation.id)
+        if prior_memory:
+            new_memory = BusinessMemory(
+                category=prior_memory["memory_category"],
+                key=prior_memory["memory_key"],
+                value=prior_memory["memory_value"],
+                source="chat",
+            )
+            db.add(new_memory)
+            metadata = {
+                "message_type": "memory_save_result",
+                "success": True,
+                "memory_key": prior_memory["memory_key"],
+            }
+            # Also note in session context
+            if not conversation.session_context:
+                conversation.session_context = {}
+            saved_list = conversation.session_context.get("recently_saved", [])
+            saved_list.append(prior_memory["memory_key"])
+            conversation.session_context["recently_saved"] = saved_list
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(conversation, "session_context")
+
     # ── Attach choices if present ───────────────────────────────────────
     if signals.get("choices"):
         if metadata is None:
@@ -1281,6 +1351,20 @@ def _find_latest_schedule_request(db: Session, conversation_id: int) -> Optional
     for msg in msgs:
         if msg.metadata_json and isinstance(msg.metadata_json, dict):
             if msg.metadata_json.get("message_type") == "workflow_schedule_request":
+                return msg.metadata_json
+    return None
+
+
+def _find_latest_memory_request(db: Session, conversation_id: int) -> Optional[dict]:
+    """Find the most recent memory_save_request metadata in this conversation."""
+    msgs = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).limit(10).all()
+
+    for msg in msgs:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "memory_save_request":
                 return msg.metadata_json
     return None
 

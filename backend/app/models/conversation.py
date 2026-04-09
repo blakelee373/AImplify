@@ -18,6 +18,7 @@ class Conversation(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    session_context: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     business: Mapped[Optional["Business"]] = relationship(back_populates="conversations")
     messages: Mapped[List["Message"]] = relationship(

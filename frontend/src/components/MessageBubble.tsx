@@ -63,6 +63,10 @@ interface MessageMetadata {
   next_run_at?: string;
   current_schedule?: string;
   choices?: string[];
+  memory_category?: string;
+  memory_key?: string;
+  memory_value?: string;
+  pending_memory?: { category: string; key: string; value: string };
 }
 
 interface MessageBubbleProps {
@@ -440,6 +444,55 @@ export function MessageBubble({ role, content, metadata, onConnectTool, onChoice
           ) : (
             <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 font-medium">
               Failed to disconnect {info.name}: {metadata.error || "Unknown error"}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Memory save request — show confirmation card
+  if (metadata?.message_type === "memory_save_request") {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 text-sm text-purple-700">
+            <div className="font-medium flex items-center gap-1.5">
+              <span className="text-base">&#128190;</span> Save to Business Memory
+            </div>
+            <div className="mt-1.5 text-purple-600">
+              <span className="font-medium">{metadata.memory_key}</span>: {metadata.memory_value}
+            </div>
+            <div className="text-xs text-purple-400 mt-1">
+              Category: {metadata.memory_category}
+            </div>
+            <div className="mt-2 text-xs text-purple-500">
+              Reply <span className="font-semibold">&ldquo;yes&rdquo;</span> to save or <span className="font-semibold">&ldquo;no&rdquo;</span> to skip
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Memory save result — show success/error banner
+  if (metadata?.message_type === "memory_save_result") {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          {metadata.success ? (
+            <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 font-medium">
+              Saved &ldquo;{metadata.memory_key}&rdquo; to business memory!
+            </div>
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 font-medium">
+              Failed to save to memory
             </div>
           )}
         </div>

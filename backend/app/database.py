@@ -24,12 +24,13 @@ _MIGRATIONS = [
     "ALTER TABLE workflows ADD COLUMN conversation_id INTEGER REFERENCES conversations(id)",
     "ALTER TABLE workflows ADD COLUMN next_run_at TIMESTAMP",
     "ALTER TABLE workflows ADD COLUMN last_run_at TIMESTAMP",
+    "ALTER TABLE conversations ADD COLUMN session_context JSON",
 ]
 
 
 def init_db():
     """Create all tables if they don't exist, then run migrations."""
-    from app.models import user, business, conversation, workflow, activity_log, integration  # noqa: F401
+    from app.models import user, business, conversation, workflow, activity_log, integration, memory  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
     # Run pending migrations (skip if column already exists)
