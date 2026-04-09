@@ -47,11 +47,11 @@ EVENT_PARAMS_TOOL = {
             },
             "start_time": {
                 "type": "string",
-                "description": "ISO 8601 start time (e.g., '2026-04-10T14:00:00Z')",
+                "description": "ISO 8601 start time with timezone offset (e.g., '2026-04-10T14:00:00-04:00'). MUST include the timezone offset from the runtime context, NOT Z/UTC.",
             },
             "end_time": {
                 "type": "string",
-                "description": "ISO 8601 end time (e.g., '2026-04-10T15:00:00Z')",
+                "description": "ISO 8601 end time with timezone offset (e.g., '2026-04-10T15:00:00-04:00'). MUST include the timezone offset from the runtime context, NOT Z/UTC.",
             },
             "description": {
                 "type": "string",
