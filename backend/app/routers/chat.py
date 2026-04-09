@@ -390,6 +390,20 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "workflow_name": matched.name,
                 "workflow_status": matched.status,
                 "current_schedule": (matched.trigger_config or {}).get("schedule", "None"),
+                "workflow_draft": {
+                    "name": matched.name,
+                    "description": matched.description or "",
+                    "trigger_type": matched.trigger_type or "schedule",
+                    "trigger_config": matched.trigger_config or {},
+                    "steps": [
+                        {
+                            "step_order": s.step_order,
+                            "action_type": s.action_type,
+                            "description": s.description or s.action_type,
+                        }
+                        for s in sorted(matched.steps, key=lambda x: x.step_order)
+                    ],
+                },
             }
         else:
             metadata = {

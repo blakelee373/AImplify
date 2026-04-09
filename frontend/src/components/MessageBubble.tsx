@@ -239,7 +239,7 @@ export function MessageBubble({ role, content, metadata, onConnectTool }: Messag
     );
   }
 
-  // Schedule change request — confirmation card
+  // Schedule change request — show full workflow summary card for confirmation
   if (metadata?.message_type === "workflow_schedule_request") {
     return (
       <div className="flex justify-start">
@@ -247,19 +247,18 @@ export function MessageBubble({ role, content, metadata, onConnectTool }: Messag
           <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
             {content}
           </div>
-          <div className="bg-blue-50 border-2 border-blue-300 rounded-xl overflow-hidden">
-            <div className="bg-blue-100 px-4 py-2.5 flex items-center gap-2">
-              <span className="text-base">{"\u{1F552}"}</span>
-              <span className="text-sm font-semibold text-blue-900">Update schedule for &ldquo;{metadata.workflow_name}&rdquo;</span>
-            </div>
-            <div className="px-4 py-3 space-y-1">
+          {metadata.workflow_draft ? (
+            <WorkflowSummaryCard draft={metadata.workflow_draft} />
+          ) : (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <h3 className="font-semibold text-stone-900 text-sm">{metadata.workflow_name}</h3>
               {metadata.current_schedule && (
-                <div className="text-xs text-blue-600">Current: {metadata.current_schedule}</div>
+                <div className="text-xs text-amber-700 mt-1">Current: {metadata.current_schedule}</div>
               )}
             </div>
-            <div className="bg-blue-100/50 px-4 py-2 text-xs text-blue-600 border-t border-blue-200">
-              Reply <span className="font-semibold">&ldquo;yes&rdquo;</span> to confirm or <span className="font-semibold">&ldquo;no&rdquo;</span> to cancel
-            </div>
+          )}
+          <div className="bg-amber-100/50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-700">
+            Reply <span className="font-semibold">&ldquo;yes&rdquo;</span> to confirm or <span className="font-semibold">&ldquo;no&rdquo;</span> to cancel
           </div>
         </div>
       </div>
