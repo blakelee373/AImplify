@@ -36,6 +36,16 @@ def create_workflow_from_draft(
     db.add(workflow)
     db.flush()  # Get the workflow.id for steps
 
+    # Compute next_run_at for scheduled workflows
+    if workflow.trigger_type == "schedule":
+        trigger_config = draft.get("trigger_config") or {}
+        cron_expr = trigger_config.get("cron_expression")
+        if cron_expr:
+            from app.services.scheduler import compute_next_run
+            workflow.next_run_at = compute_next_run(
+                cron_expr, tz_name=trigger_config.get("timezone", "UTC")
+            )
+
     for step_data in draft.get("steps", []):
         step = WorkflowStep(
             workflow_id=workflow.id,

@@ -58,6 +58,13 @@ async def update_workflow_status(
     workflow.status = req.status
     workflow.updated_at = datetime.now(timezone.utc)
 
+    # Sync next_run_at for scheduled workflows
+    if req.status == "active" and workflow.trigger_type == "schedule":
+        from app.services.scheduler import update_next_run
+        update_next_run(db, workflow)
+    elif req.status == "paused":
+        workflow.next_run_at = None
+
     log = ActivityLog(
         workflow_id=workflow.id,
         action_type="workflow_status_change",

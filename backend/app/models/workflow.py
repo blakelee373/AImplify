@@ -23,6 +23,8 @@ class Workflow(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
 
     business: Mapped[Optional["Business"]] = relationship(back_populates="workflows")
     steps: Mapped[List["WorkflowStep"]] = relationship(

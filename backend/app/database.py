@@ -22,6 +22,8 @@ def get_db():
 
 _MIGRATIONS = [
     "ALTER TABLE workflows ADD COLUMN conversation_id INTEGER REFERENCES conversations(id)",
+    "ALTER TABLE workflows ADD COLUMN next_run_at TIMESTAMP",
+    "ALTER TABLE workflows ADD COLUMN last_run_at TIMESTAMP",
 ]
 
 

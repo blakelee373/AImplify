@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +22,7 @@ from app.services.ai_engine import (
     extract_workflow_from_conversation,
     extract_action_from_conversation,
     extract_run_context_from_conversation,
+    extract_schedule_from_conversation,
     match_workflow_by_name,
 )
 from app.services.workflow_engine import create_workflow_from_draft
@@ -138,6 +140,20 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 else:
                     error = m.metadata_json.get("error", "")
                     content += f"\n\n[System: Workflow '{wf_name}' failed. Error: {error}]"
+            elif msg_type == "workflow_schedule_request":
+                wf_name = m.metadata_json.get("workflow_name", "")
+                content += f"\n\n[System: A confirmation card to change the schedule of '{wf_name}' is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <workflow_schedule_confirmed> — " \
+                           "do NOT re-summarize or show another <workflow_schedule>.]"
+            elif msg_type == "workflow_schedule_result":
+                success = m.metadata_json.get("success", False)
+                wf_name = m.metadata_json.get("workflow_name", "")
+                if success:
+                    new_sched = m.metadata_json.get("new_schedule", "")
+                    content += f"\n\n[System: Schedule for '{wf_name}' was updated to: {new_sched}.]"
+                else:
+                    error = m.metadata_json.get("error", "")
+                    content += f"\n\n[System: Failed to update schedule for '{wf_name}'. Error: {error}]"
             elif msg_type == "workflow_list":
                 wfs = m.metadata_json.get("workflows", [])
                 content += f"\n\n[System: Workflow list was shown to user — {len(wfs)} workflow(s).]"
@@ -321,6 +337,97 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "success": False,
                 "steps_executed": 0,
                 "results": [],
+                "error": "Could not find that workflow.",
+            }
+
+    # ── Schedule management (set / change schedule) ──────────────────────
+    if signals["workflow_schedule"]:
+        wf_name = signals["workflow_schedule"]
+        matched = match_workflow_by_name(all_workflows, wf_name)
+        if matched:
+            metadata = {
+                "message_type": "workflow_schedule_request",
+                "workflow_id": matched.id,
+                "workflow_name": matched.name,
+                "workflow_status": matched.status,
+                "current_schedule": (matched.trigger_config or {}).get("schedule", "None"),
+            }
+        else:
+            metadata = {
+                "message_type": "workflow_manage_not_found",
+                "manage_action": "change schedule of",
+                "query": wf_name,
+            }
+
+    if signals["workflow_schedule_confirmed"]:
+        wf_name = signals["workflow_schedule_confirmed"]
+        prior = _find_latest_schedule_request(db, conversation.id)
+        wf_id = prior.get("workflow_id") if prior else None
+
+        if not wf_id:
+            matched = match_workflow_by_name(all_workflows, wf_name)
+            wf_id = matched.id if matched else None
+
+        if wf_id:
+            wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
+            if wf:
+                # Extract the new schedule from the conversation
+                schedule_data = await extract_schedule_from_conversation(messages, timezone=tz)
+                if schedule_data:
+                    # Update trigger_config
+                    new_config = dict(wf.trigger_config or {})
+                    new_config["cron_expression"] = schedule_data["cron_expression"]
+                    new_config["schedule"] = schedule_data["schedule_description"]
+                    new_config["frequency"] = schedule_data["frequency"]
+                    new_config["timezone"] = tz
+                    wf.trigger_config = new_config
+                    wf.trigger_type = "schedule"
+                    wf.updated_at = datetime.now(timezone.utc)
+
+                    # Recompute next_run_at
+                    from app.services.scheduler import update_next_run
+                    update_next_run(db, wf)
+
+                    # Log to activity
+                    log_entry = ActivityLog(
+                        workflow_id=wf.id,
+                        action_type="schedule_updated",
+                        description=f"Schedule for '{wf.name}' updated to: {schedule_data['schedule_description']}",
+                        details={
+                            "cron_expression": schedule_data["cron_expression"],
+                            "schedule": schedule_data["schedule_description"],
+                            "source": "chat",
+                        },
+                    )
+                    db.add(log_entry)
+                    db.commit()
+
+                    metadata = {
+                        "message_type": "workflow_schedule_result",
+                        "success": True,
+                        "workflow_name": wf.name,
+                        "new_schedule": schedule_data["schedule_description"],
+                        "next_run_at": wf.next_run_at.isoformat() if wf.next_run_at else None,
+                    }
+                else:
+                    metadata = {
+                        "message_type": "workflow_schedule_result",
+                        "success": False,
+                        "workflow_name": wf.name,
+                        "error": "Could not understand the new schedule.",
+                    }
+            else:
+                metadata = {
+                    "message_type": "workflow_schedule_result",
+                    "success": False,
+                    "workflow_name": wf_name,
+                    "error": "Could not find that workflow.",
+                }
+        else:
+            metadata = {
+                "message_type": "workflow_schedule_result",
+                "success": False,
+                "workflow_name": wf_name,
                 "error": "Could not find that workflow.",
             }
 
@@ -791,6 +898,20 @@ def _find_latest_run_request(db: Session, conversation_id: int) -> Optional[dict
     return None
 
 
+def _find_latest_schedule_request(db: Session, conversation_id: int) -> Optional[dict]:
+    """Find the most recent workflow_schedule_request metadata in this conversation."""
+    msgs = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).all()
+
+    for msg in msgs:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "workflow_schedule_request":
+                return msg.metadata_json
+    return None
+
+
 def _execute_workflow_manage(db: Session, action: str, workflow_id: int) -> dict:
     """Execute a workflow management action (pause/resume/delete)."""
     from datetime import datetime, timezone
@@ -826,6 +947,13 @@ def _execute_workflow_manage(db: Session, action: str, workflow_id: int) -> dict
     old_status = workflow.status
     workflow.status = new_status
     workflow.updated_at = datetime.now(timezone.utc)
+
+    # Sync next_run_at for scheduled workflows
+    if new_status == "active" and workflow.trigger_type == "schedule":
+        from app.services.scheduler import update_next_run
+        update_next_run(db, workflow)
+    elif new_status == "paused":
+        workflow.next_run_at = None
 
     log = ActivityLog(
         workflow_id=workflow.id,
