@@ -28,7 +28,16 @@ your PAST messages — the backend adds them, not you.
 
 IMMEDIATE ACTIONS — DO SOMETHING RIGHT NOW:
 
-If the user asks you to do something right now (not set up a recurring process), \
+CRITICAL — RECURRING vs ONE-TIME:
+Before treating ANYTHING as an immediate action, check for recurrence words: \
+"every", "weekly", "daily", "monthly", "recurring", "automatically", "repeat", \
+"each week", "each day", "every morning", "every Monday", "on a schedule", etc. \
+If the user's message contains ANY of these, this is NOT an immediate action — \
+skip this section entirely and go to WORKFLOW SETUP below. \
+Even if the task involves sending email or creating events, if it repeats, it is a WORKFLOW. \
+NEVER use <action_request> for recurring tasks. ALWAYS use the workflow discovery flow.
+
+If the user asks you to do something right now (a single one-time action, not recurring), \
 treat it as an immediate action. Recognize requests like:
 - "Send Jane a welcome email at jane@example.com" → send_email
 - "Create a calendar event for Friday at 2pm" → create_event
@@ -120,7 +129,11 @@ and include the <action_request> tag again.
 WORKFLOW SETUP — SET UP A RECURRING PROCESS:
 
 If the user describes a task they want to happen automatically or repeatedly (not a \
-one-time action), follow the workflow discovery flow below.
+one-time action), follow the workflow discovery flow below. \
+IMPORTANT: Even if the recurring task involves sending email, creating events, or \
+other actions — you are setting up a WORKFLOW, not executing an immediate action. \
+Do NOT use <action_request> or <action_confirmed> tags during workflow setup. \
+Only use <workflow_ready> and <workflow_confirmed> tags.
 
 1. OPENING — If there is only one user message in the conversation (the first message), \
 greet them warmly and ask:
@@ -248,6 +261,26 @@ When the user confirms ("yes", "go ahead"):
 
 If the user says "no" or changes their mind, acknowledge it and move on.
 
+SCHEDULE MANAGEMENT — SET OR CHANGE A SCHEDULE:
+
+If the owner wants to set or change when a workflow runs (e.g., "change reminders to \
+every Monday", "make the welcome email run daily at 8am", "update the schedule to \
+twice a week"), handle it as a schedule change request.
+
+When you recognize a schedule change request:
+1. Confirm what you understood: "Got it — you'd like to change [workflow name] to run \
+[new schedule]. Sound good?"
+2. At the very end of your message, append this hidden tag on its own line:
+<workflow_schedule>WORKFLOW_NAME</workflow_schedule>
+Replace WORKFLOW_NAME with the name of the workflow.
+
+When the user confirms ("yes," "go ahead," "do it"):
+1. Respond with something short like "Done — I've updated the schedule!"
+2. At the very end of your message, append this hidden tag:
+<workflow_schedule_confirmed>WORKFLOW_NAME</workflow_schedule_confirmed>
+
+If the user says "no" or changes their mind, acknowledge it and move on.
+
 TOOL CONNECTIONS — CONNECT OR DISCONNECT TOOLS:
 
 Available tools that can be connected: Gmail, Google Calendar.
@@ -322,6 +355,16 @@ WORKFLOW_TOOL = {
                         "type": "string",
                         "description": "Schedule description if time-based (e.g., 'every morning at 9am')",
                     },
+                    "cron_expression": {
+                        "type": "string",
+                        "description": "Standard 5-field cron expression (minute hour day_of_month month day_of_week). "
+                        "Examples: '0 9 * * *' (daily 9am), '0 9 * * 1' (Mondays 9am), '0 17 * * 1-5' (weekdays 5pm), "
+                        "'30 8 * * 1,3,5' (Mon/Wed/Fri 8:30am). The times are in the owner's local timezone.",
+                    },
+                    "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone of the schedule, e.g. 'America/Chicago', 'America/New_York'",
+                    },
                 },
                 "required": ["frequency"],
             },
@@ -356,7 +399,14 @@ EXTRACTION_PROMPT = """\
 You are a workflow extraction system. Analyze the conversation below and extract \
 the structured workflow the user described. Identify the trigger (what kicks it off), \
 the steps (in order), and any conditions or tools mentioned. Use the save_workflow \
-tool to output the result. Be precise and complete — capture every step the user described.\
+tool to output the result. Be precise and complete — capture every step the user described.
+
+IMPORTANT — When trigger_type is "schedule":
+- You MUST generate a valid 5-field cron expression in trigger_config.cron_expression.
+- Cron format: minute hour day_of_month month day_of_week
+- Examples: "every morning at 9am" → "0 9 * * *", "every Monday at 8am" → "0 8 * * 1", \
+"weekdays at 5pm" → "0 17 * * 1-5", "every hour" → "0 * * * *"
+- Also set trigger_config.timezone to the user's timezone if known (from conversation context).\
 """
 
 
@@ -443,6 +493,20 @@ def parse_ai_response(raw_content: str) -> dict:
     if workflow_run_confirmed_match:
         workflow_run_confirmed = workflow_run_confirmed_match.group(1).strip()
 
+    # Extract workflow_schedule (e.g., <workflow_schedule>New client welcome</workflow_schedule>)
+    workflow_schedule = None
+    workflow_schedule_match = re.search(r"<workflow_schedule>(.+?)</workflow_schedule>", raw_content)
+    if workflow_schedule_match:
+        workflow_schedule = workflow_schedule_match.group(1).strip()
+
+    # Extract workflow_schedule_confirmed
+    workflow_schedule_confirmed = None
+    workflow_schedule_confirmed_match = re.search(
+        r"<workflow_schedule_confirmed>(.+?)</workflow_schedule_confirmed>", raw_content
+    )
+    if workflow_schedule_confirmed_match:
+        workflow_schedule_confirmed = workflow_schedule_confirmed_match.group(1).strip()
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
@@ -468,6 +532,10 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(workflow_run_match.group(0), "")
     if workflow_run_confirmed_match:
         clean = clean.replace(workflow_run_confirmed_match.group(0), "")
+    if workflow_schedule_match:
+        clean = clean.replace(workflow_schedule_match.group(0), "")
+    if workflow_schedule_confirmed_match:
+        clean = clean.replace(workflow_schedule_confirmed_match.group(0), "")
     clean = clean.strip()
 
     return {
@@ -486,6 +554,8 @@ def parse_ai_response(raw_content: str) -> dict:
         "workflow_status": workflow_status,
         "workflow_run": workflow_run,
         "workflow_run_confirmed": workflow_run_confirmed,
+        "workflow_schedule": workflow_schedule,
+        "workflow_schedule_confirmed": workflow_schedule_confirmed,
     }
 
 
@@ -700,6 +770,58 @@ async def extract_run_context_from_conversation(
         return {}
 
 
+SCHEDULE_EXTRACTION_TOOL = {
+    "name": "extract_schedule",
+    "description": "Extract the new schedule from the conversation for updating a workflow.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "cron_expression": {
+                "type": "string",
+                "description": "Standard 5-field cron expression (minute hour day_of_month month day_of_week)",
+            },
+            "schedule_description": {
+                "type": "string",
+                "description": "Human-readable schedule description (e.g., 'every Monday at 9am')",
+            },
+            "frequency": {
+                "type": "string",
+                "description": "Frequency label: daily, weekly, weekdays, etc.",
+            },
+        },
+        "required": ["cron_expression", "schedule_description", "frequency"],
+    },
+}
+
+
+async def extract_schedule_from_conversation(
+    messages: List[Dict[str, str]], timezone: str = "UTC"
+) -> Optional[dict]:
+    """Extract a new schedule (cron expression + description) from the conversation."""
+    try:
+        response = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=(
+                "You are a schedule extraction system. The user wants to change when a workflow runs. "
+                "Analyze the conversation and extract the new schedule they described. "
+                "Generate a valid 5-field cron expression and a human-readable description. "
+                "Cron format: minute hour day_of_month month day_of_week. "
+                "Examples: 'every morning at 9am' → cron '0 9 * * *', 'Mondays at 8am' → '0 8 * * 1'. "
+                f"The user's timezone is {timezone}."
+            ),
+            messages=messages,
+            tools=[SCHEDULE_EXTRACTION_TOOL],
+            tool_choice={"type": "tool", "name": "extract_schedule"},
+        )
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "extract_schedule":
+                return block.input
+        return None
+    except Exception:
+        return None
+
+
 def match_workflow_by_name(db_workflows: list, name_query: str) -> Optional[object]:
     """Fuzzy-match a workflow by name. Returns the best match or None.
 
@@ -824,10 +946,11 @@ async def get_ai_response(
         wf_list = ", ".join(f'"{n}"' for n in workflow_names)
         system += f"\n\nThe owner currently has these saved processes: {wf_list}. " \
                   "Use the exact name when referencing them in <workflow_manage>, " \
-                  "<workflow_status>, and <workflow_run> tags. " \
+                  "<workflow_status>, <workflow_run>, and <workflow_schedule> tags. " \
                   "You CAN list these workflows (<workflow_list>), check their activity " \
                   "(<workflow_status>), show recent system activity (<workflow_activity>), " \
-                  "and run them manually (<workflow_run>). NEVER say you can't do these things."
+                  "run them manually (<workflow_run>), and change their schedule " \
+                  "(<workflow_schedule>). NEVER say you can't do these things."
     else:
         system += "\n\nThe owner has no saved processes yet. If they ask to see their workflows, " \
                   "still use <workflow_list>true</workflow_list> — the system will show an empty state."

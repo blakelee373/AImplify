@@ -90,6 +90,11 @@ personalize the output. Use the provided tool to return the parameters.
 You ARE connected to the owner's Gmail and Google Calendar. You CAN send emails \
 and create events. NEVER claim you can't do something — just generate the parameters.
 
+IMPORTANT — When the step says "yourself", "self", "me", or "the owner", use the \
+owner_email or client_email from the runtime context as the recipient. \
+NEVER use placeholder emails like "me@example.com" or "self" — always use the \
+actual email address from the context.
+
 For dates and times, use the day reference below to convert day names to exact dates. \
 Always produce full ISO 8601 timestamps with the correct timezone offset.\
 """
@@ -103,7 +108,7 @@ ACTION_MAP = {
     },
     "create_event": {
         "tool": EVENT_PARAMS_TOOL,
-        "aliases": ["create_event", "schedule_event", "add_calendar_event", "schedule"],
+        "aliases": ["create_event", "create_calendar_event", "schedule_event", "add_calendar_event", "schedule"],
     },
     "check_calendar": {
         "tool": AVAILABILITY_PARAMS_TOOL,
@@ -212,9 +217,17 @@ async def execute_step(
             "details": {"error": "Failed to generate parameters for this step"},
         }
 
-    # Merge any explicit action_config from the workflow step (overrides AI-generated)
+    # Merge action_config, but skip bare time strings (HH:MM) that would
+    # overwrite the AI's proper ISO 8601 timestamps for calendar events.
     if action_config:
-        params.update(action_config)
+        import re as _merge_re
+        bare_time_pattern = _merge_re.compile(r"^\d{1,2}:\d{2}$")
+        for key, value in action_config.items():
+            if key in ("start_time", "end_time") and isinstance(value, str) and bare_time_pattern.match(value):
+                continue  # Skip — AI generated a full ISO timestamp
+            if key in ("duration_minutes",):
+                continue  # Internal metadata, not an API parameter
+            params[key] = value
 
     try:
         if canonical == "send_email":

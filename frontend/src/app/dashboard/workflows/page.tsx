@@ -22,6 +22,8 @@ interface WorkflowItem {
   steps: WorkflowStep[];
   created_at: string;
   updated_at: string;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
 }
 
 export default function WorkflowsPage() {

@@ -23,6 +23,8 @@ class WorkflowResponse(BaseModel):
     trigger_config: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
+    next_run_at: Optional[datetime] = None
+    last_run_at: Optional[datetime] = None
     steps: List[WorkflowStepResponse] = []
 
     class Config:

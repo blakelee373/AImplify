@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +22,7 @@ from app.services.ai_engine import (
     extract_workflow_from_conversation,
     extract_action_from_conversation,
     extract_run_context_from_conversation,
+    extract_schedule_from_conversation,
     match_workflow_by_name,
 )
 from app.services.workflow_engine import create_workflow_from_draft
@@ -138,6 +140,20 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 else:
                     error = m.metadata_json.get("error", "")
                     content += f"\n\n[System: Workflow '{wf_name}' failed. Error: {error}]"
+            elif msg_type == "workflow_schedule_request":
+                wf_name = m.metadata_json.get("workflow_name", "")
+                content += f"\n\n[System: A confirmation card to change the schedule of '{wf_name}' is being shown. " \
+                           "When they confirm, respond with a short acknowledgment and use <workflow_schedule_confirmed> — " \
+                           "do NOT re-summarize or show another <workflow_schedule>.]"
+            elif msg_type == "workflow_schedule_result":
+                success = m.metadata_json.get("success", False)
+                wf_name = m.metadata_json.get("workflow_name", "")
+                if success:
+                    new_sched = m.metadata_json.get("new_schedule", "")
+                    content += f"\n\n[System: Schedule for '{wf_name}' was updated to: {new_sched}.]"
+                else:
+                    error = m.metadata_json.get("error", "")
+                    content += f"\n\n[System: Failed to update schedule for '{wf_name}'. Error: {error}]"
             elif msg_type == "workflow_list":
                 wfs = m.metadata_json.get("workflows", [])
                 content += f"\n\n[System: Workflow list was shown to user — {len(wfs)} workflow(s).]"
@@ -161,6 +177,38 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     ).all()
     connected_providers = [i.provider for i in connected_integrations]
 
+    # ── Pre-flight: check if the user's message implies a disconnected tool ──
+    # Catches tool needs early — before calling the AI or starting workflow
+    # discovery — so we can prompt connection immediately.
+    needed_provider = _detect_tool_from_user_intent(request.message, connected_providers)
+    if needed_provider:
+        provider_name = "Gmail" if needed_provider == "gmail" else "Google Calendar"
+        clean_content = (
+            f"I'd love to help with that! First, we'll need to connect your {provider_name}. "
+            "Click below to get that set up — it only takes a moment!"
+        )
+        metadata = {
+            "message_type": "connect_tool",
+            "provider": needed_provider,
+        }
+
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=clean_content,
+            metadata_json=metadata,
+        )
+        db.add(assistant_message)
+        if conversation.title == "New conversation":
+            conversation.title = request.message[:80]
+        db.commit()
+        db.refresh(assistant_message)
+
+        return ChatResponse(
+            conversation_id=conversation.id,
+            message=MessageResponse.model_validate(assistant_message),
+        )
+
     raw_content = await get_ai_response(
         messages, timezone=tz, workflow_names=wf_names,
         connected_providers=connected_providers,
@@ -181,6 +229,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         # Find the most recent workflow draft in this conversation
         draft = _find_latest_draft(db, conversation.id)
         if draft:
+            # Inject the user's timezone into schedule trigger config so cron
+            # fires at the right local time (not UTC)
+            if draft.get("trigger_type") == "schedule":
+                tc = draft.get("trigger_config") or {}
+                if "timezone" not in tc:
+                    tc["timezone"] = tz
+                    draft["trigger_config"] = tc
             workflow = create_workflow_from_draft(db, draft, conversation.id)
             metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
 
@@ -324,8 +379,140 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "error": "Could not find that workflow.",
             }
 
-    # Detect action request — from tag or from response content as fallback
-    action_request_type = signals["action_request"] or _detect_action_from_content(clean_content)
+    # ── Schedule management (set / change schedule) ──────────────────────
+    # Fallback: detect schedule change proposals from AI response content
+    # when the AI forgets to emit the <workflow_schedule> tag
+    if not signals["workflow_schedule"] and not metadata:
+        detected_wf = _detect_schedule_change(clean_content, all_workflows)
+        if detected_wf:
+            signals["workflow_schedule"] = detected_wf
+
+    if signals["workflow_schedule"]:
+        wf_name = signals["workflow_schedule"]
+        matched = match_workflow_by_name(all_workflows, wf_name)
+        if matched:
+            metadata = {
+                "message_type": "workflow_schedule_request",
+                "workflow_id": matched.id,
+                "workflow_name": matched.name,
+                "workflow_status": matched.status,
+                "current_schedule": (matched.trigger_config or {}).get("schedule", "None"),
+                "workflow_draft": {
+                    "name": matched.name,
+                    "description": matched.description or "",
+                    "trigger_type": matched.trigger_type or "schedule",
+                    "trigger_config": matched.trigger_config or {},
+                    "steps": [
+                        {
+                            "step_order": s.step_order,
+                            "action_type": s.action_type,
+                            "description": s.description or s.action_type,
+                        }
+                        for s in sorted(matched.steps, key=lambda x: x.step_order)
+                    ],
+                },
+            }
+        else:
+            metadata = {
+                "message_type": "workflow_manage_not_found",
+                "manage_action": "change schedule of",
+                "query": wf_name,
+            }
+
+    if signals["workflow_schedule_confirmed"]:
+        wf_name = signals["workflow_schedule_confirmed"]
+        prior = _find_latest_schedule_request(db, conversation.id)
+        wf_id = prior.get("workflow_id") if prior else None
+
+        if not wf_id:
+            matched = match_workflow_by_name(all_workflows, wf_name)
+            wf_id = matched.id if matched else None
+
+        if wf_id:
+            wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
+            if wf:
+                # Extract the new schedule from the conversation
+                schedule_data = await extract_schedule_from_conversation(messages, timezone=tz)
+                if schedule_data:
+                    # Capture old schedule info before overwriting
+                    old_schedule_text = (wf.trigger_config or {}).get("schedule", "")
+                    old_cron = (wf.trigger_config or {}).get("cron_expression", "")
+
+                    # Update trigger_config
+                    new_config = dict(wf.trigger_config or {})
+                    new_config["cron_expression"] = schedule_data["cron_expression"]
+                    new_config["schedule"] = schedule_data["schedule_description"]
+                    new_config["frequency"] = schedule_data["frequency"]
+                    new_config["timezone"] = tz
+                    wf.trigger_config = new_config
+                    wf.trigger_type = "schedule"
+                    wf.updated_at = datetime.now(timezone.utc)
+
+                    # Update description to reflect the new schedule
+                    if wf.description and old_schedule_text:
+                        wf.description = wf.description.replace(
+                            old_schedule_text, schedule_data["schedule_description"]
+                        )
+
+                    # Update workflow step descriptions and action_configs
+                    # that reference the old scheduled time
+                    _update_step_times(db, wf, old_cron, schedule_data["cron_expression"])
+
+                    # Recompute next_run_at
+                    from app.services.scheduler import update_next_run
+                    update_next_run(db, wf)
+
+                    # Log to activity
+                    log_entry = ActivityLog(
+                        workflow_id=wf.id,
+                        action_type="schedule_updated",
+                        description=f"Schedule for '{wf.name}' updated to: {schedule_data['schedule_description']}",
+                        details={
+                            "cron_expression": schedule_data["cron_expression"],
+                            "schedule": schedule_data["schedule_description"],
+                            "source": "chat",
+                        },
+                    )
+                    db.add(log_entry)
+                    db.commit()
+
+                    metadata = {
+                        "message_type": "workflow_schedule_result",
+                        "success": True,
+                        "workflow_name": wf.name,
+                        "new_schedule": schedule_data["schedule_description"],
+                        "next_run_at": wf.next_run_at.isoformat() if wf.next_run_at else None,
+                    }
+                else:
+                    metadata = {
+                        "message_type": "workflow_schedule_result",
+                        "success": False,
+                        "workflow_name": wf.name,
+                        "error": "Could not understand the new schedule.",
+                    }
+            else:
+                metadata = {
+                    "message_type": "workflow_schedule_result",
+                    "success": False,
+                    "workflow_name": wf_name,
+                    "error": "Could not find that workflow.",
+                }
+        else:
+            metadata = {
+                "message_type": "workflow_schedule_result",
+                "success": False,
+                "workflow_name": wf_name,
+                "error": "Could not find that workflow.",
+            }
+
+    # Detect action request — from tag or from response content as fallback.
+    # IMPORTANT: Skip content-based detection if workflow signals are present —
+    # workflow summaries that mention "email" or "calendar" must not be hijacked
+    # by the action detection fallback.
+    if metadata or signals["workflow_ready"] or signals["workflow_confirmed"]:
+        action_request_type = signals["action_request"]  # Only explicit tag, no fallback
+    else:
+        action_request_type = signals["action_request"] or _detect_action_from_content(clean_content)
 
     # Map action types to the provider they require
     ACTION_PROVIDER = {
@@ -354,8 +541,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     "provider": required_provider,
                 }
 
-    if action_request_type:
+    if action_request_type and not metadata:
         # Check if the required tool is connected before proceeding
+        # (skip if workflow/schedule metadata is already set — don't override it)
         required_provider = ACTION_PROVIDER.get(action_request_type)
         if required_provider and required_provider not in connected_providers:
             # Tool not connected — show connect card instead of action card
@@ -389,8 +577,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     "action_params": params or {},
                 }
 
-    if signals["action_confirmed"]:
+    if signals["action_confirmed"] and not metadata:
         # Determine action type: from the confirmed tag, from a prior action_request, or None
+        # (skip if workflow metadata is already set — don't override it)
         confirmed_val = signals["action_confirmed"]
         action_meta = _find_latest_action_request(db, conversation.id)
 
@@ -554,6 +743,45 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
 
 import re as _re
+
+
+def _detect_tool_from_user_intent(message: str, connected_providers: list) -> Optional[str]:
+    """Check if the user's message implies they need a tool that isn't connected.
+
+    Scans for keywords that indicate email or calendar/scheduling intent.
+    Returns the first disconnected provider needed, or None.
+    """
+    lower = message.lower()
+
+    # Calendar/scheduling keywords (checked first — user wants aggressive prompting)
+    calendar_keywords = [
+        "calendar", "event", "events", "appointment", "appointments",
+        "meeting", "meetings", "schedule", "scheduling", "book",
+        "booking", "bookings", "availability", "remind", "reminder",
+        "reminders", "recurring", "every day", "every week",
+        "every monday", "every tuesday", "every wednesday",
+        "every thursday", "every friday", "every saturday", "every sunday",
+        "every morning", "every evening", "every afternoon",
+        "daily", "weekly", "monthly",
+    ]
+
+    # Email keywords
+    email_keywords = [
+        "email", "emails", "e-mail", "send an email", "send email",
+        "send a reminder", "send reminders", "send a follow-up",
+        "send follow-up", "newsletter", "welcome email",
+        "welcome message", "follow-up email", "follow up email",
+    ]
+
+    if "google_calendar" not in connected_providers:
+        if any(kw in lower for kw in calendar_keywords):
+            return "google_calendar"
+
+    if "gmail" not in connected_providers:
+        if any(kw in lower for kw in email_keywords):
+            return "gmail"
+
+    return None
 
 
 def _detect_action_gathering(content: str) -> Optional[str]:
@@ -791,6 +1019,110 @@ def _find_latest_run_request(db: Session, conversation_id: int) -> Optional[dict
     return None
 
 
+def _find_latest_schedule_request(db: Session, conversation_id: int) -> Optional[dict]:
+    """Find the most recent workflow_schedule_request metadata in this conversation."""
+    msgs = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.role == "assistant",
+    ).order_by(Message.created_at.desc()).all()
+
+    for msg in msgs:
+        if msg.metadata_json and isinstance(msg.metadata_json, dict):
+            if msg.metadata_json.get("message_type") == "workflow_schedule_request":
+                return msg.metadata_json
+    return None
+
+
+def _detect_schedule_change(content: str, workflows: list) -> Optional[str]:
+    """Detect if the AI is proposing a schedule change without emitting the tag.
+
+    Looks for patterns like 'change "X" to run daily' or 'update X to every Monday'
+    combined with a confirmation question. Returns the matched workflow name or None.
+    """
+    lower = content.lower()
+
+    # Must look like a confirmation
+    confirm_phrases = ["sound good", "that right", "get that right", "want me to",
+                       "shall i", "go ahead", "ready to", "is that correct"]
+    if not any(p in lower for p in confirm_phrases):
+        return None
+
+    # Must mention schedule-related words
+    schedule_words = ["change", "update", "switch", "move", "set",
+                      "daily", "weekly", "every", "schedule", "run"]
+    if not any(w in lower for w in schedule_words):
+        return None
+
+    # Try to match a workflow name from the content
+    for wf in workflows:
+        if wf.name.lower() in lower:
+            return wf.name
+
+    return None
+
+
+def _update_step_times(db: Session, workflow, old_cron: str, new_cron: str) -> None:
+    """Update workflow step descriptions and action_configs to match the new schedule.
+
+    Directly sets times from the new cron expression instead of trying to
+    find/replace old times (which fails when they're already out of sync).
+    """
+    import re as _t_re
+    from app.models.workflow import WorkflowStep
+
+    def _parse_cron_time(cron_expr: str):
+        """Extract (hour, minute) from a 5-field cron expression."""
+        parts = cron_expr.strip().split()
+        if len(parts) >= 2:
+            try:
+                return int(parts[1]), int(parts[0])
+            except ValueError:
+                return None, None
+        return None, None
+
+    new_h, new_m = _parse_cron_time(new_cron)
+    if new_h is None:
+        return
+
+    new_h12 = new_h % 12 or 12
+    new_ampm = "AM" if new_h < 12 else "PM"
+
+    steps = db.query(WorkflowStep).filter(
+        WorkflowStep.workflow_id == workflow.id
+    ).all()
+
+    for step in steps:
+        cfg = dict(step.action_config) if step.action_config else {}
+        dur = cfg.get("duration_minutes", 5)
+
+        # Compute new end time
+        end_h, end_m = new_h, new_m + dur
+        if end_m >= 60:
+            end_h += end_m // 60
+            end_m = end_m % 60
+        end_h = end_h % 24
+        end_h12 = end_h % 12 or 12
+        end_ampm = "AM" if end_h < 12 else "PM"
+
+        # Update action_config time fields if they exist
+        if "start_time" in cfg or "end_time" in cfg:
+            if "start_time" in cfg:
+                cfg["start_time"] = f"{new_h:02d}:{new_m:02d}"
+            if "end_time" in cfg:
+                cfg["end_time"] = f"{end_h:02d}:{end_m:02d}"
+            step.action_config = cfg
+
+        # Update description — replace any time-range pattern
+        if step.description:
+            new_desc = _t_re.sub(
+                r"\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*(?:am|pm|AM|PM)?",
+                f"{new_h12}:{new_m:02d}-{end_h12}:{end_m:02d}{new_ampm.lower()}",
+                step.description,
+            )
+            if new_desc != step.description:
+                step.description = new_desc
+
+
 def _execute_workflow_manage(db: Session, action: str, workflow_id: int) -> dict:
     """Execute a workflow management action (pause/resume/delete)."""
     from datetime import datetime, timezone
@@ -826,6 +1158,13 @@ def _execute_workflow_manage(db: Session, action: str, workflow_id: int) -> dict
     old_status = workflow.status
     workflow.status = new_status
     workflow.updated_at = datetime.now(timezone.utc)
+
+    # Sync next_run_at for scheduled workflows
+    if new_status == "active" and workflow.trigger_type == "schedule":
+        from app.services.scheduler import update_next_run
+        update_next_run(db, workflow)
+    elif new_status == "paused":
+        workflow.next_run_at = None
 
     log = ActivityLog(
         workflow_id=workflow.id,

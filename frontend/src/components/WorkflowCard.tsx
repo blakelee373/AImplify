@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { WorkflowStatusBadge } from "./WorkflowStatusBadge";
-import { getTriggerLabel, timeAgo } from "@/lib/workflow-utils";
+import { getTriggerLabel, timeAgo, formatNextRun } from "@/lib/workflow-utils";
 
 interface WorkflowCardProps {
   workflow: {
@@ -12,6 +12,7 @@ interface WorkflowCardProps {
     trigger_config?: Record<string, string> | null;
     steps: Array<{ id: number; step_order: number; action_type: string; description?: string }>;
     updated_at: string;
+    next_run_at?: string | null;
   };
 }
 
@@ -35,6 +36,12 @@ export function WorkflowCard({ workflow }: WorkflowCardProps) {
 
       <div className="mt-3 flex items-center gap-3 text-xs text-stone-400">
         <span>{getTriggerLabel(workflow.trigger_type, workflow.trigger_config)}</span>
+        {workflow.next_run_at && workflow.status === "active" && (
+          <>
+            <span>&middot;</span>
+            <span className="text-amber-600">Next: {formatNextRun(workflow.next_run_at)}</span>
+          </>
+        )}
         <span>&middot;</span>
         <span>{stepCount} step{stepCount !== 1 ? "s" : ""}</span>
         <span>&middot;</span>

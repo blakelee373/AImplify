@@ -31,3 +31,30 @@ export function timeAgo(iso: string): string {
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
 }
+
+export function formatNextRun(iso: string): string {
+  // next_run_at is stored as UTC — append Z if missing so JS parses it correctly
+  const date = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
+  const now = new Date();
+  const diffMs = date.getTime() - now.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  const timeStr = date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  if (diffMs < 0) return "Overdue";
+  if (diffDays === 0) return `Today at ${timeStr}`;
+  if (diffDays === 1) return `Tomorrow at ${timeStr}`;
+  if (diffDays < 7) {
+    const day = date.toLocaleDateString(undefined, { weekday: "long" });
+    return `${day} at ${timeStr}`;
+  }
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
