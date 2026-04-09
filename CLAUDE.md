@@ -38,6 +38,18 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - `_detect_tool_from_user_intent()` pre-flight check scans user messages for tool keywords and short-circuits with connect card before calling AI
 - Google OAuth tokens expire after 7 days in "Testing" mode; `google_auth.py` catches `invalid_grant` and marks integration as "expired"
 
+## Email-Based Triggers
+- Background email watcher runs as an asyncio task in FastAPI lifespan, polling Gmail every 120s
+- Watches active workflows with `trigger_type="event"` and `trigger_config.event_type="email_received"`
+- `trigger_config.gmail_query` stores Gmail search syntax (e.g., `"from:leads@example.com is:unread"`)
+- `last_run_at` tracks the polling window start; `after:{epoch}` bounds the Gmail query
+- Matched emails are marked as read after processing to prevent re-triggering on `is:unread` queries
+- In-memory `OrderedDict` deduplicates message IDs per workflow (capped at 200, FIFO eviction)
+- Email context (sender, subject, snippet) is injected into workflow step execution
+- Claude generates Gmail queries during workflow extraction when `trigger_type="event"` and `event_type="email_received"`
+- System prompt guides owners through describing email filters in plain language
+- `extract_email_filter_from_conversation()` in `ai_engine.py` is scaffolding for future email filter editing
+
 ## Tool Connection System
 - Connection status is dynamic in the system prompt — built by `_build_connection_status()` from actual DB state
 - OAuth popup flow: `/api/integrations/{provider}/connect-url` returns JSON URL, callback serves self-closing HTML with `postMessage`

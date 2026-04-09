@@ -46,6 +46,11 @@ def create_workflow_from_draft(
                 cron_expr, tz_name=trigger_config.get("timezone", "UTC")
             )
 
+    # Set last_run_at for event-triggered workflows (polling window start)
+    if workflow.trigger_type == "event":
+        from datetime import datetime, timezone
+        workflow.last_run_at = datetime.now(timezone.utc)
+
     for step_data in draft.get("steps", []):
         step = WorkflowStep(
             workflow_id=workflow.id,
