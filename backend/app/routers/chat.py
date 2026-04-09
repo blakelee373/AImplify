@@ -177,6 +177,38 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     ).all()
     connected_providers = [i.provider for i in connected_integrations]
 
+    # ── Pre-flight: check if the user's message implies a disconnected tool ──
+    # Catches tool needs early — before calling the AI or starting workflow
+    # discovery — so we can prompt connection immediately.
+    needed_provider = _detect_tool_from_user_intent(request.message, connected_providers)
+    if needed_provider:
+        provider_name = "Gmail" if needed_provider == "gmail" else "Google Calendar"
+        clean_content = (
+            f"I'd love to help with that! First, we'll need to connect your {provider_name}. "
+            "Click below to get that set up — it only takes a moment!"
+        )
+        metadata = {
+            "message_type": "connect_tool",
+            "provider": needed_provider,
+        }
+
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=clean_content,
+            metadata_json=metadata,
+        )
+        db.add(assistant_message)
+        if conversation.title == "New conversation":
+            conversation.title = request.message[:80]
+        db.commit()
+        db.refresh(assistant_message)
+
+        return ChatResponse(
+            conversation_id=conversation.id,
+            message=MessageResponse.model_validate(assistant_message),
+        )
+
     raw_content = await get_ai_response(
         messages, timezone=tz, workflow_names=wf_names,
         connected_providers=connected_providers,
@@ -661,6 +693,45 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
 
 import re as _re
+
+
+def _detect_tool_from_user_intent(message: str, connected_providers: list) -> Optional[str]:
+    """Check if the user's message implies they need a tool that isn't connected.
+
+    Scans for keywords that indicate email or calendar/scheduling intent.
+    Returns the first disconnected provider needed, or None.
+    """
+    lower = message.lower()
+
+    # Calendar/scheduling keywords (checked first — user wants aggressive prompting)
+    calendar_keywords = [
+        "calendar", "event", "events", "appointment", "appointments",
+        "meeting", "meetings", "schedule", "scheduling", "book",
+        "booking", "bookings", "availability", "remind", "reminder",
+        "reminders", "recurring", "every day", "every week",
+        "every monday", "every tuesday", "every wednesday",
+        "every thursday", "every friday", "every saturday", "every sunday",
+        "every morning", "every evening", "every afternoon",
+        "daily", "weekly", "monthly",
+    ]
+
+    # Email keywords
+    email_keywords = [
+        "email", "emails", "e-mail", "send an email", "send email",
+        "send a reminder", "send reminders", "send a follow-up",
+        "send follow-up", "newsletter", "welcome email",
+        "welcome message", "follow-up email", "follow up email",
+    ]
+
+    if "google_calendar" not in connected_providers:
+        if any(kw in lower for kw in calendar_keywords):
+            return "google_calendar"
+
+    if "gmail" not in connected_providers:
+        if any(kw in lower for kw in email_keywords):
+            return "gmail"
+
+    return None
 
 
 def _detect_action_gathering(content: str) -> Optional[str]:
