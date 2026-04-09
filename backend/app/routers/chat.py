@@ -463,8 +463,14 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "error": "Could not find that workflow.",
             }
 
-    # Detect action request — from tag or from response content as fallback
-    action_request_type = signals["action_request"] or _detect_action_from_content(clean_content)
+    # Detect action request — from tag or from response content as fallback.
+    # IMPORTANT: Skip content-based detection if workflow signals are present —
+    # workflow summaries that mention "email" or "calendar" must not be hijacked
+    # by the action detection fallback.
+    if metadata or signals["workflow_ready"] or signals["workflow_confirmed"]:
+        action_request_type = signals["action_request"]  # Only explicit tag, no fallback
+    else:
+        action_request_type = signals["action_request"] or _detect_action_from_content(clean_content)
 
     # Map action types to the provider they require
     ACTION_PROVIDER = {
@@ -493,8 +499,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     "provider": required_provider,
                 }
 
-    if action_request_type:
+    if action_request_type and not metadata:
         # Check if the required tool is connected before proceeding
+        # (skip if workflow/schedule metadata is already set — don't override it)
         required_provider = ACTION_PROVIDER.get(action_request_type)
         if required_provider and required_provider not in connected_providers:
             # Tool not connected — show connect card instead of action card
@@ -528,8 +535,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     "action_params": params or {},
                 }
 
-    if signals["action_confirmed"]:
+    if signals["action_confirmed"] and not metadata:
         # Determine action type: from the confirmed tag, from a prior action_request, or None
+        # (skip if workflow metadata is already set — don't override it)
         confirmed_val = signals["action_confirmed"]
         action_meta = _find_latest_action_request(db, conversation.id)
 
