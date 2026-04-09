@@ -735,6 +735,8 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(workflow_edit_confirmed_match.group(0), "")
     if choices_match:
         clean = clean.replace(choices_match.group(0), "")
+    # Strip any [System: ...] text the AI may echo from its history
+    clean = re.sub(r"\[System:.*?\]", "", clean)
     clean = clean.strip()
 
     return {
