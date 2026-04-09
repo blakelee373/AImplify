@@ -30,6 +30,18 @@ from app.services.workflow_engine import create_workflow_from_draft
 from app.services.workflow_runner import run_workflow
 from app.services.gmail import send_email
 from app.services.calendar import create_event, update_event, check_availability, list_upcoming_events
+from app.services.form_state import (
+    get_active_form,
+    create_form_state,
+    update_form_fields,
+    check_completion,
+    get_next_missing_field,
+    build_form_context,
+    is_auto_execute,
+    is_skip_confirmation,
+    REQUIRED_FIELD_SCHEMAS,
+)
+from app.models.action_form import ActionFormState
 
 router = APIRouter(prefix="/api")
 
@@ -99,12 +111,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     error = details.get("error", "Unknown error")
                     content += f"\n\n[System: Action '{action_type}' failed. Error: {error}]"
             elif msg_type == "action_request":
-                # Let Claude know a confirmation card was shown so it emits
-                # <action_confirmed> (not another <action_request>) when the user says "yes"
                 action_type = m.metadata_json.get("action_type", "")
-                content += f"\n\n[System: A confirmation card for '{action_type}' is being shown to the user. " \
-                           "When they confirm, respond with a short acknowledgment and use <action_confirmed> — " \
-                           "do NOT re-summarize or show another <action_request>.]"
+                content += (
+                    f"\n\n[System: A confirmation card for '{action_type}' is being shown to the user. "
+                    "If the user says yes, the system executes automatically. "
+                    "If they want changes, help them adjust.]"
+                )
             elif msg_type == "connect_tool":
                 provider = m.metadata_json.get("provider", "")
                 content += f"\n\n[System: A 'Connect' button for '{provider}' is being shown to the user. " \
@@ -223,9 +235,216 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             message=MessageResponse.model_validate(assistant_message),
         )
 
-    raw_content = await get_ai_response(
+    # ── Form state machine: check for active action form ────────────────
+    # Map action types to the provider they require
+    ACTION_PROVIDER = {
+        "send_email": "gmail",
+        "create_event": "google_calendar",
+        "update_event": "google_calendar",
+        "check_availability": "google_calendar",
+        "list_events": "google_calendar",
+    }
+
+    active_form = get_active_form(db, conversation.id)
+    form_ctx = None  # system prompt addendum for field collection
+    include_intent = True  # whether to include register_intent tool
+
+    if active_form and active_form.status == "ready":
+        # User is responding to a confirmation card
+        if _is_affirmative(request.message):
+            # Execute the action
+            exec_meta = {
+                "action_type": active_form.action_type,
+                "action_params": active_form.fields or {},
+            }
+            result = await _execute_chat_action(
+                db, exec_meta, conversation_id=conversation.id
+            )
+            active_form.status = "executed"
+            db.commit()
+
+            # Let AI produce a short acknowledgment
+            ack_context = (
+                f"\n\n[System: The {active_form.action_type} action was just executed "
+                f"{'successfully' if result['status'] == 'success' else 'with an error'}. "
+                "Say something short like 'Done!' or 'On it!' — the system shows the result card.]"
+            )
+            raw_content, _ = await get_ai_response(
+                messages, timezone=tz, workflow_names=wf_names,
+                connected_providers=connected_providers,
+                form_context=ack_context,
+                include_intent_tool=False,
+            )
+            signals = parse_ai_response(raw_content)
+            clean_content = signals["clean_content"]
+            metadata = {
+                "message_type": "action_result",
+                "action_type": active_form.action_type,
+                "success": result["status"] == "success",
+                "details": result.get("details", {}),
+            }
+
+            # Skip the rest of signal processing — go straight to save
+            assistant_message = Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=clean_content,
+                metadata_json=metadata,
+            )
+            db.add(assistant_message)
+            if conversation.title == "New conversation":
+                conversation.title = request.message[:80]
+            db.commit()
+            db.refresh(assistant_message)
+            return ChatResponse(
+                conversation_id=conversation.id,
+                message=MessageResponse.model_validate(assistant_message),
+            )
+
+        elif _is_negative(request.message):
+            active_form.status = "cancelled"
+            db.commit()
+            # Fall through to normal AI call
+
+        else:
+            # User is correcting a field — go back to collecting
+            active_form.status = "collecting"
+            db.commit()
+            # Re-extract fields below
+            active_form = get_active_form(db, conversation.id)
+
+    if active_form and active_form.status == "collecting":
+        # Extract latest field values from the full conversation
+        params = await extract_action_from_conversation(
+            messages, active_form.action_type, timezone=tz
+        )
+        if params:
+            update_form_fields(db, active_form, params)
+            db.refresh(active_form)
+
+        if check_completion(active_form):
+            # Check provider connection before proceeding
+            required_provider = ACTION_PROVIDER.get(active_form.action_type)
+            if required_provider and required_provider not in connected_providers:
+                provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
+                active_form.status = "cancelled"
+                db.commit()
+                clean_content = (
+                    f"To do that, we'll need to connect your {provider_name} first. "
+                    "Click below to get that set up — it only takes a moment!"
+                )
+                metadata = {
+                    "message_type": "connect_tool",
+                    "provider": required_provider,
+                }
+                assistant_message = Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=clean_content,
+                    metadata_json=metadata,
+                )
+                db.add(assistant_message)
+                if conversation.title == "New conversation":
+                    conversation.title = request.message[:80]
+                db.commit()
+                db.refresh(assistant_message)
+                return ChatResponse(
+                    conversation_id=conversation.id,
+                    message=MessageResponse.model_validate(assistant_message),
+                )
+
+            if is_skip_confirmation(active_form.action_type):
+                # Execute immediately — no confirmation card (e.g., check_availability)
+                active_form.status = "executed"
+                db.commit()
+                exec_meta = {
+                    "action_type": active_form.action_type,
+                    "action_params": active_form.fields or {},
+                }
+                result = await _execute_chat_action(
+                    db, exec_meta, conversation_id=conversation.id
+                )
+                # Let AI acknowledge the result
+                ack_context = (
+                    f"\n\n[System: The {active_form.action_type} action was just executed "
+                    f"{'successfully' if result['status'] == 'success' else 'with an error'}. "
+                    "Respond naturally to the result.]"
+                )
+                raw_content, _ = await get_ai_response(
+                    messages, timezone=tz, workflow_names=wf_names,
+                    connected_providers=connected_providers,
+                    form_context=ack_context,
+                    include_intent_tool=False,
+                )
+                signals = parse_ai_response(raw_content)
+                clean_content = signals["clean_content"]
+                metadata = {
+                    "message_type": "action_result",
+                    "action_type": active_form.action_type,
+                    "success": result["status"] == "success",
+                    "details": result.get("details", {}),
+                }
+                assistant_message = Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=clean_content,
+                    metadata_json=metadata,
+                )
+                db.add(assistant_message)
+                if conversation.title == "New conversation":
+                    conversation.title = request.message[:80]
+                db.commit()
+                db.refresh(assistant_message)
+                return ChatResponse(
+                    conversation_id=conversation.id,
+                    message=MessageResponse.model_validate(assistant_message),
+                )
+
+            # All required fields collected — show confirmation card
+            active_form.status = "ready"
+            db.commit()
+
+            # Let AI write a brief confirmation summary
+            confirm_ctx = build_form_context(active_form)
+            raw_content, _ = await get_ai_response(
+                messages, timezone=tz, workflow_names=wf_names,
+                connected_providers=connected_providers,
+                form_context=confirm_ctx,
+                include_intent_tool=False,
+            )
+            signals = parse_ai_response(raw_content)
+            clean_content = signals["clean_content"]
+            metadata = {
+                "message_type": "action_request",
+                "action_type": active_form.action_type,
+                "action_params": active_form.fields or {},
+            }
+
+            assistant_message = Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=clean_content,
+                metadata_json=metadata,
+            )
+            db.add(assistant_message)
+            if conversation.title == "New conversation":
+                conversation.title = request.message[:80]
+            db.commit()
+            db.refresh(assistant_message)
+            return ChatResponse(
+                conversation_id=conversation.id,
+                message=MessageResponse.model_validate(assistant_message),
+            )
+
+        # Still missing fields — inject context for AI
+        form_ctx = build_form_context(active_form)
+        include_intent = False  # Don't re-trigger intent while collecting
+
+    raw_content, detected_action = await get_ai_response(
         messages, timezone=tz, workflow_names=wf_names,
         connected_providers=connected_providers,
+        form_context=form_ctx,
+        include_intent_tool=include_intent,
     )
     signals = parse_ai_response(raw_content)
     clean_content = signals["clean_content"]
@@ -707,59 +926,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "error": "Could not find that workflow.",
             }
 
-    # Detect action request — from tag or from response content as fallback.
-    # IMPORTANT: Skip content-based detection if workflow signals are present —
-    # workflow summaries that mention "email" or "calendar" must not be hijacked
-    # by the action detection fallback.
-    if metadata or signals["workflow_ready"] or signals["workflow_confirmed"]:
-        action_request_type = signals["action_request"]  # Only explicit tag, no fallback
-    else:
-        action_request_type = signals["action_request"] or _detect_action_from_content(clean_content)
-
-    # Map action types to the provider they require
-    ACTION_PROVIDER = {
-        "send_email": "gmail",
-        "create_event": "google_calendar",
-        "update_event": "google_calendar",
-        "check_availability": "google_calendar",
-        "list_events": "google_calendar",
-    }
-
-    # Safety net: if the AI is gathering fields for a disconnected tool
-    # (asking for subject, time, etc. without emitting a connect_tool tag),
-    # intercept and show a connect card instead.
-    if not action_request_type and not signals.get("connect_tool") and not metadata:
-        gathering_action = _detect_action_gathering(clean_content)
-        if gathering_action:
-            required_provider = ACTION_PROVIDER.get(gathering_action)
-            if required_provider and required_provider not in connected_providers:
-                provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
-                clean_content = (
-                    f"To do that, we'll need to connect your {provider_name} first. "
-                    "Click below to get that set up — it only takes a moment!"
-                )
-                metadata = {
-                    "message_type": "connect_tool",
-                    "provider": required_provider,
-                }
-
-    # Suppress action_request if the AI is still asking for information.
-    # The AI sometimes emits <action_request> prematurely while still gathering
-    # fields (e.g., asking "what's your email address?"). If the response ends
-    # with an info-gathering question, drop the action request.
-    if action_request_type and not metadata:
-        _last = clean_content.rsplit(".", 1)[-1].strip().lower() or clean_content.lower()
-        if _last.endswith("?") and _re.search(
-            r"\b(what('?s)?|who|which|where|how much|how many)\b", _last
-        ):
-            action_request_type = None
-
-    if action_request_type and not metadata:
-        # Check if the required tool is connected before proceeding
-        # (skip if workflow/schedule metadata is already set — don't override it)
-        required_provider = ACTION_PROVIDER.get(action_request_type)
+    # ── Intent detection via register_intent tool ─────────────────────
+    # If the AI called register_intent, handle the detected action type.
+    # This replaces the old <action_request>/<action_confirmed> tag system.
+    if detected_action and not metadata:
+        required_provider = ACTION_PROVIDER.get(detected_action)
         if required_provider and required_provider not in connected_providers:
-            # Tool not connected — show connect card instead of action card
+            # Tool not connected — show connect card
             provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
             clean_content = (
                 f"To do that, we'll need to connect your {provider_name} first. "
@@ -769,70 +942,41 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "message_type": "connect_tool",
                 "provider": required_provider,
             }
+        elif is_auto_execute(detected_action):
+            # Auto-execute actions (list_events, check_availability)
+            params = await extract_action_from_conversation(
+                messages, detected_action, timezone=tz
+            )
+            exec_meta = {"action_type": detected_action, "action_params": params or {}}
+            result = await _execute_chat_action(
+                db, exec_meta, conversation_id=conversation.id
+            )
+            metadata = {
+                "message_type": "action_result",
+                "action_type": detected_action,
+                "success": result["status"] == "success",
+                "details": result.get("details", {}),
+            }
         else:
-            # Extract structured action parameters via a second Claude call
-            params = await extract_action_from_conversation(messages, action_request_type, timezone=tz)
-
-            # Read-only actions execute immediately — no confirmation needed
-            if action_request_type in ("list_events", "check_availability"):
-                exec_meta = {"action_type": action_request_type, "action_params": params or {}}
-                result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
-                metadata = {
-                    "message_type": "action_result",
-                    "action_type": action_request_type,
-                    "success": result["status"] == "success",
-                    "details": result.get("details", {}),
-                }
-            else:
+            # Create form state for confirmation-required actions
+            form = create_form_state(db, conversation.id, detected_action)
+            # Extract any fields already provided in the conversation
+            params = await extract_action_from_conversation(
+                messages, detected_action, timezone=tz
+            )
+            if params:
+                update_form_fields(db, form, params)
+                db.refresh(form)
+            if check_completion(form):
+                # User gave everything in one message — show confirmation card
+                form.status = "ready"
+                db.commit()
                 metadata = {
                     "message_type": "action_request",
-                    "action_type": action_request_type,
-                    "action_params": params or {},
+                    "action_type": detected_action,
+                    "action_params": form.fields or {},
                 }
-
-    if signals["action_confirmed"] and not metadata:
-        # Determine action type: from the confirmed tag, from a prior action_request, or None
-        # (skip if workflow metadata is already set — don't override it)
-        confirmed_val = signals["action_confirmed"]
-        action_meta = _find_latest_action_request(db, conversation.id)
-
-        if isinstance(confirmed_val, str):
-            # Claude included the action type in <action_confirmed>send_email</action_confirmed>
-            action_type = confirmed_val
-        elif action_meta:
-            action_type = action_meta["action_type"]
-        else:
-            action_type = None
-
-        if action_type:
-            # Guard: check if required tool is connected before executing
-            required_provider = ACTION_PROVIDER.get(action_type)
-            if required_provider and required_provider not in connected_providers:
-                provider_name = "Gmail" if required_provider == "gmail" else "Google Calendar"
-                clean_content = (
-                    f"Hmm, it looks like your {provider_name} isn't connected yet. "
-                    "Let's get that set up first!"
-                )
-                metadata = {
-                    "message_type": "connect_tool",
-                    "provider": required_provider,
-                }
-            else:
-                # Re-extract params from the full conversation (captures any additions)
-                fresh_params = await extract_action_from_conversation(
-                    messages, action_type, timezone=tz
-                )
-                exec_meta = {
-                    "action_type": action_type,
-                    "action_params": fresh_params or (action_meta or {}).get("action_params", {}),
-                }
-                result = await _execute_chat_action(db, exec_meta, conversation_id=conversation.id)
-                metadata = {
-                    "message_type": "action_result",
-                    "action_type": action_type,
-                    "success": result["status"] == "success",
-                    "details": result.get("details", {}),
-                }
+            # Otherwise form stays "collecting" — AI's response already asks
 
     # ── Workflow management (pause / resume / delete) ──────────────────
     if signals["workflow_manage"]:
@@ -963,9 +1107,6 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     )
 
 
-import re as _re
-
-
 def _detect_tool_from_user_intent(message: str, connected_providers: list) -> Optional[str]:
     """Check if the user's message implies they need a tool that isn't connected.
 
@@ -1005,81 +1146,26 @@ def _detect_tool_from_user_intent(message: str, connected_providers: list) -> Op
     return None
 
 
-def _detect_action_gathering(content: str) -> Optional[str]:
-    """Detect if the AI is engaging with an action request instead of suggesting connection.
-
-    Catches any response where the AI is proceeding with an email or calendar task
-    (gathering fields, offering choices, disambiguating) without suggesting a tool connection.
-    """
-    lower = content.lower()
-    # Must contain a question — the AI is asking the user something
-    if "?" not in lower:
-        return None
-    # Email: any response that engages with sending email
-    email_signals = [
-        "subject", "body", "email say", "email should", "send that email",
-        "send an email", "send the email", "draft", "write the email",
-        "who should i", "who do you want", "recipient", "send it to",
+def _is_affirmative(message: str) -> bool:
+    """Check if a user message is confirming an action."""
+    lower = message.strip().lower()
+    affirmatives = [
+        "yes", "yeah", "yep", "yup", "sure", "go ahead", "do it",
+        "sounds good", "looks good", "perfect", "confirmed", "ok", "okay",
+        "go for it", "send it", "create it", "book it", "let's do it",
+        "that's right", "correct", "absolutely",
     ]
-    if any(s in lower for s in email_signals):
-        return "send_email"
-    # Calendar: any response that engages with calendar/scheduling
-    cal_signals = [
-        "event", "meeting", "appointment", "schedule", "put on your calendar",
-        "add to your calendar", "block off", "what time", "how long should",
-        "your calendar", "time slot", "availability", "available",
-        "what's on", "show you", "check if", "free", "busy",
+    return any(a in lower for a in affirmatives)
+
+
+def _is_negative(message: str) -> bool:
+    """Check if a user message is cancelling an action."""
+    lower = message.strip().lower()
+    negatives = [
+        "no", "nope", "cancel", "never mind", "nevermind", "stop",
+        "forget it", "don't", "scratch that",
     ]
-    if any(s in lower for s in cal_signals):
-        return "check_availability"
-    return None
-
-
-def _detect_action_from_content(content: str) -> Optional[str]:
-    """Fallback: detect if the AI response is asking for confirmation of an action.
-
-    Returns the action type if detected, None otherwise.
-    """
-    lower = content.lower()
-
-    # If the response ends with a question gathering information (what, who,
-    # which, where, how), it's still collecting fields — NOT confirming.
-    # Only the LAST sentence matters; confirmation phrases earlier in the
-    # response (e.g., recapping "you want me to...") are not confirmation.
-    last_sentence = lower.rsplit(".", 1)[-1].strip()
-    if not last_sentence:
-        last_sentence = lower
-    info_gathering = _re.search(
-        r"\b(what('?s)?|who|which|where|how much|how many|what address|what email)\b",
-        last_sentence,
-    )
-    if info_gathering and last_sentence.rstrip().endswith("?"):
-        return None
-
-    # Must contain a confirmation question
-    # Check only the tail end of the response (last ~200 chars) to avoid
-    # matching recap phrases like "you mentioned you want me to..."
-    tail = lower[-200:] if len(lower) > 200 else lower
-    confirmation_phrases = [
-        "sound good", "want me to", "shall i", "go ahead",
-        "ready to", "look right", "look correct", "that right",
-        "does that work", "want me to go", "should i",
-    ]
-    has_confirmation = any(phrase in tail for phrase in confirmation_phrases)
-    if not has_confirmation:
-        return None
-
-    # Detect action type from keywords
-    if _re.search(r"\bemail\b|\bsend\b.*\bto\b.*@", lower):
-        return "send_email"
-    if _re.search(r"\bevent\b|\bcalendar\b|\bmeeting\b|\bappointment\b", lower):
-        return "create_event"
-    if _re.search(r"\bavailab|\bfree\b|\bbusy\b|\bopen\b.*\bslot", lower):
-        return "check_availability"
-    if _re.search(r"\badd\b.*\b(attend|invite)\b|\binvite\b.*\bto\b", lower):
-        return "update_event"
-
-    return None
+    return any(n in lower for n in negatives)
 
 
 def _find_latest_draft(db: Session, conversation_id: int) -> Optional[dict]:
