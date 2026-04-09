@@ -96,8 +96,12 @@ async def email_watcher_loop() -> None:
 
                         # Build time-bounded query using after: with epoch seconds
                         # Use last_run_at as the polling window start, with 60s overlap buffer
+                        # SQLite strips timezone info, so treat naive datetimes as UTC
                         if workflow.last_run_at:
-                            epoch = int(workflow.last_run_at.timestamp()) - 60
+                            last_run = workflow.last_run_at
+                            if last_run.tzinfo is None:
+                                last_run = last_run.replace(tzinfo=timezone.utc)
+                            epoch = int(last_run.timestamp()) - 60
                         else:
                             # First poll: look back 1 hour
                             epoch = int(now.timestamp()) - 3600
