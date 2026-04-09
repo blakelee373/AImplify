@@ -581,18 +581,31 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         if not matched:
             matched = match_workflow_by_name(all_workflows, wf_name)
         if matched:
+            current_steps = [
+                {
+                    "step_order": s.step_order,
+                    "action_type": s.action_type,
+                    "description": s.description or s.action_type,
+                }
+                for s in sorted(matched.steps, key=lambda x: x.step_order)
+            ]
+            # Extract proposed changes so the card shows the UPDATED steps
+            edit_preview = await extract_workflow_edit_from_conversation(
+                messages, current_steps
+            )
+            preview_steps = list(current_steps)  # copy
+            if edit_preview and edit_preview.get("step_updates"):
+                for update in edit_preview["step_updates"]:
+                    for step in preview_steps:
+                        if step["step_order"] == update.get("step_order"):
+                            if update.get("new_description"):
+                                step["description"] = update["new_description"]
+                            break
             metadata = {
                 "message_type": "workflow_edit_request",
                 "workflow_id": matched.id,
                 "workflow_name": matched.name,
-                "steps": [
-                    {
-                        "step_order": s.step_order,
-                        "action_type": s.action_type,
-                        "description": s.description or s.action_type,
-                    }
-                    for s in sorted(matched.steps, key=lambda x: x.step_order)
-                ],
+                "steps": preview_steps,
             }
         else:
             metadata = {
