@@ -574,7 +574,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     # ── Workflow editing (change step content) ─────────────────────────────
     if signals.get("workflow_edit"):
         wf_name = signals["workflow_edit"]
-        matched = match_workflow_by_name(all_workflows, wf_name)
+        # Prefer the workflow linked to THIS conversation over name matching
+        matched = db.query(Workflow).filter(
+            Workflow.conversation_id == conversation.id
+        ).first()
+        if not matched:
+            matched = match_workflow_by_name(all_workflows, wf_name)
         if matched:
             metadata = {
                 "message_type": "workflow_edit_request",
@@ -603,8 +608,15 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         wf_id = prior.get("workflow_id") if prior else None
 
         if not wf_id:
-            matched = match_workflow_by_name(all_workflows, wf_name)
-            wf_id = matched.id if matched else None
+            # Prefer workflow linked to THIS conversation
+            conv_wf = db.query(Workflow).filter(
+                Workflow.conversation_id == conversation.id
+            ).first()
+            if conv_wf:
+                wf_id = conv_wf.id
+            else:
+                matched = match_workflow_by_name(all_workflows, wf_name)
+                wf_id = matched.id if matched else None
 
         if wf_id:
             wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
