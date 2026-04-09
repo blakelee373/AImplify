@@ -19,6 +19,12 @@ async def run_workflow(
     context: runtime data like {"client_name": "Jane", "client_email": "jane@example.com"}
     Returns a list of step results.
     """
+    # Ensure timezone is always in context — pull from trigger_config if missing
+    if "timezone" not in context:
+        wf_tz = (workflow.trigger_config or {}).get("timezone")
+        if wf_tz:
+            context["timezone"] = wf_tz
+
     results = []
 
     for step in workflow.steps:
