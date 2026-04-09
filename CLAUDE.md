@@ -23,12 +23,21 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - DELETE /api/conversations/{id} nulls out Workflow.conversation_id FK before cascade-deleting messages
 
 ## Signal Tag System
-- AI embeds hidden XML tags in responses (e.g., `<action_request>send_email</action_request>`) to trigger backend actions
-- Tags are parsed in `parse_ai_response()` in `ai_engine.py`, stripped from user-visible content
-- Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `workflow_schedule`, `workflow_schedule_confirmed`, `workflow_edit`, `workflow_edit_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`, `choices`
-- New action types must be added to: `ACTION_EXTRACTION_TOOLS` (ai_engine.py), `ACTION_PROVIDER` map (chat.py), `_execute_chat_action` (chat.py), `ACTION_LABELS` (MessageBubble.tsx)
-- Handler ordering in chat.py matters: workflow query handlers (list/status/activity/run) must run BEFORE `_detect_action_gathering` safety net to prevent false positives on words like "schedule" in workflow descriptions
+- AI embeds hidden XML tags in responses for **workflow** operations — tags are parsed in `parse_ai_response()` in `ai_engine.py`, stripped from user-visible content
+- Current workflow tags: `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `workflow_schedule`, `workflow_schedule_confirmed`, `workflow_edit`, `workflow_edit_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`, `choices`
+- **Immediate actions** (send_email, create_event, etc.) do NOT use signal tags — they use the state machine (see below)
 - When adding new AI capabilities via signal tags, the system prompt must assertively state the AI HAS the capability (like connection status does) — otherwise the AI may claim it can't do it
+
+## Action State Machine (Phase 17B)
+- Immediate actions use a backend state machine instead of AI-driven signal tags
+- **Intent detection**: AI calls `register_intent` tool (defined in `REGISTER_INTENT_TOOL` in ai_engine.py) with `action_type` — replaces `<action_request>` tags
+- **Form state**: `ActionFormState` model tracks fields per conversation — status flows: `collecting` → `ready` → `executed` (or `cancelled`)
+- **Field schemas**: `REQUIRED_FIELD_SCHEMAS` in `form_state.py` defines required/optional fields per action type
+- **Field collection**: Backend extracts fields from conversation each turn, tells AI which field to ask about next via system prompt injection (`build_form_context()`)
+- **Confirmation**: Card shown automatically when all required fields are non-null — AI never decides this
+- **Execution**: Backend detects affirmative user message (`_is_affirmative()`) when form status is "ready" and executes directly
+- **Auto-execute actions**: `list_events` and `check_availability` bypass the form state — they execute immediately when intent is detected
+- New action types must be added to: `REQUIRED_FIELD_SCHEMAS` (form_state.py), `REGISTER_INTENT_TOOL` enum (ai_engine.py), `ACTION_EXTRACTION_TOOLS` (ai_engine.py), `ACTION_PROVIDER` map (chat.py), `_execute_chat_action` (chat.py), `ACTION_LABELS` (MessageBubble.tsx)
 
 ## Choice Buttons
 - `<choices>Option A|Option B|Option C</choices>` renders clickable buttons in the chat UI
@@ -49,7 +58,7 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - User's timezone is injected from `request.timezone` into `trigger_config.timezone` during workflow_confirmed handling
 - Scheduled runs inject owner's Gmail address into context via `users.getProfile` API so "send to yourself" resolves
 - `next_run_at` is stored as UTC; frontend must append `Z` to ISO strings before `new Date()` parsing
-- Content-based fallbacks exist for `workflow_schedule` and `action_request` tags when the AI forgets to emit them
+- Content-based fallback exists for `workflow_schedule` tags when the AI forgets to emit them
 - `_detect_tool_from_user_intent()` pre-flight check scans user messages for tool keywords and short-circuits with connect card before calling AI
 - Google OAuth tokens expire after 7 days in "Testing" mode; `google_auth.py` catches `invalid_grant` and marks integration as "expired"
 
@@ -96,10 +105,9 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - `EVENT_PARAMS_TOOL` examples use timezone offset format (`-04:00`), NOT `Z`/UTC — the AI copies the example format
 - `gmail.py` validates and cleans email addresses before sending — extracts valid email from `"Name <email>"` format, rejects empty/invalid values with clear error messages
 
-## Action Detection Guards
-- `_detect_action_from_content` only checks confirmation phrases in the last ~200 chars and skips if the response ends with an info-gathering question (what/who/which/where + ?)
-- Before the `action_request` handler, if the response ends with an info-gathering question, `action_request_type` is nulled — prevents premature confirmation cards from both explicit tags and content-based fallbacks
+## Action Detection
 - When adding new AI capabilities, update `PROVIDER_DISPLAY` capabilities string — the connection status assertively tells the AI what it CAN do, and omissions cause the AI to claim it can't
+- The `_detect_tool_from_user_intent()` pre-flight check still runs before the AI call to catch disconnected-tool scenarios early
 
 ## Tool Connection System
 - Connection status is dynamic in the system prompt — built by `_build_connection_status()` from actual DB state

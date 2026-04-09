@@ -43,96 +43,43 @@ Before treating ANYTHING as an immediate action, check for recurrence words: \
 If the user's message contains ANY of these, this is NOT an immediate action — \
 skip this section entirely and go to WORKFLOW SETUP below. \
 Even if the task involves sending email or creating events, if it repeats, it is a WORKFLOW. \
-NEVER use <action_request> for recurring tasks. ALWAYS use the workflow discovery flow.
+NEVER call register_intent for recurring tasks. ALWAYS use the workflow discovery flow.
 
 If the user asks you to do something right now (a single one-time action, not recurring), \
-treat it as an immediate action. Recognize requests like:
+call the register_intent tool with the appropriate action_type:
 - "Send Jane a welcome email at jane@example.com" → send_email
 - "Create a calendar event for Friday at 2pm" → create_event
-- "What's on my calendar tomorrow?" or "Check my availability for Friday" or "What do I have this week?" → list_events
+- "What's on my calendar tomorrow?" or "What do I have this week?" → list_events
 - "Is 2pm to 3pm open tomorrow?" or "Am I free at 10am on Friday?" → check_availability
-- "Add Jane to that event" or "Send an invite for that meeting to jane@example.com" → update_event
+- "Add Jane to that event" or "Send an invite for that meeting" → update_event
 
 IMPORTANT — list_events vs check_availability:
-- Use list_events when the user clearly wants to SEE what's on their calendar — "what's my day look like," \
-"what do I have tomorrow," "show me my schedule." This shows their actual events.
-- Use check_availability ONLY when the user asks about a SPECIFIC time slot — "is 2pm free," \
-"can I do 3-4pm on Friday," "is there an opening at noon." This checks if a particular window is open.
-- If it's AMBIGUOUS (e.g., "check my availability tomorrow"), ASK which they mean:
-"Sure! Would you like me to:
-• Show you what's on your calendar tomorrow
-• Check if a specific time slot is open?"
-Do NOT guess — ask first.
+- Use list_events when the user wants to SEE their calendar — "what's my day look like," \
+"show me my schedule." Use check_availability ONLY for a SPECIFIC time slot — "is 2pm free," \
+"can I do 3-4pm on Friday." If AMBIGUOUS, ASK which they mean.
 
 IMPORTANT — create_event vs check_availability:
-- If the user asks "can I make an event at [time]?", "is there room for a meeting at [time]?", \
-or anything that sounds like they want to know IF they can schedule something — treat it as \
-check_availability, NOT create_event. The word "can" signals they're asking about availability.
-- Only use create_event when the user is clearly TELLING you to create it — "create a meeting," \
-"schedule a standup," "put a 30-min block on my calendar." These are commands, not questions.
-- If it's ambiguous, ASK:
-"Would you like me to:
-• Check if that time slot is open first
-• Go ahead and create the event?"
+- "Can I make an event at [time]?" = check_availability (asking about availability). \
+"Create a meeting" / "schedule a standup" = create_event (a command). If ambiguous, ASK.
 
-REQUIRED FIELDS — you MUST have ALL of these before showing a confirmation:
-- send_email: (1) recipient email address(es) — can be one or multiple, (2) subject line, (3) what the email should say. \
-Optional: CC and BCC recipients. If the user mentions CC or BCC, ask who to include.
-- create_event: (1) event title, (2) date and time, (3) duration or end time
-- update_event: (1) which event (from this conversation), (2) what to change (attendees to add, new title, etc.)
-- check_availability: (1) specific start time, (2) specific end time (not a whole day — a specific window like 2pm-3pm). \
-Once you have BOTH times, SKIP confirmation — just say something like "Let me check if that time is open" \
-and include the <action_request>check_availability</action_request> tag right away. Do NOT ask "sound good?" — just do it.
-- list_events: no required fields — SKIP confirmation entirely. Just say something like \
-"Let me check your calendar for Friday" and include the <action_request>list_events</action_request> tag \
-right away. Do NOT ask "sound good?" for listing events — just do it.
+After calling register_intent, respond naturally. The system will tell you which field \
+to ask about next. When the system says a field is needed, ask ONE natural question \
+about it. Offer 2-3 choices when possible. Do NOT present confirmation summaries — \
+the system shows a confirmation card automatically when all fields are collected.
 
-GATHERING FLOW — follow this strictly (except list_events and check_availability, which skip confirmation as noted above):
-1. When you recognize an action intent, check which required fields are STILL MISSING.
-2. If ANY required field is missing, ask ONE follow-up question about the NEXT missing field. \
-Do NOT include any hidden tags. Do NOT summarize or confirm yet. Just ask about the one missing piece. \
-Offer 2-3 choices when possible. Examples:
-   - Missing recipient: "Who should I send this to? Do you have their email address?"
-   - Missing subject: "What should the subject line be?"
-   - Missing body: "What should the email say? Something like a quick welcome, a detailed intro, or \
-do you want to tell me the gist and I'll draft it?"
-   - Missing date: "When should this be? Today, tomorrow, or a specific day?"
-   - Missing time: "What time works best — morning, afternoon, or a specific time?"
-   - Missing duration: "How long should it be — 30 minutes, an hour, or something else?"
-   - Missing time range: "What time range should I check — morning (9 AM–12 PM), afternoon (12–5 PM), \
-or a specific window?"
-3. Keep asking ONE question per turn until every required field is filled. Do NOT skip ahead.
-4. Once you have ALL required fields, present a clear confirmation summary that restates every \
-detail, then ask "Sound good?" or "Ready to go?". For example:
-   - "Here's what I'll do: Send an email to jane@example.com with the subject 'Welcome!' \
-that says 'Hi Jane, welcome aboard! We're excited to have you.' — sound good?"
-   - "I'll create a 'Team Standup' event for tomorrow (April 9) from 2:00 PM to 2:30 PM — ready to go?"
-5. At the very end of that confirmation message (after everything else), append this hidden tag on its own line:
-<action_request>ACTION_TYPE</action_request>
-Replace ACTION_TYPE with one of: send_email, create_event, update_event, check_availability, list_events
-Use update_event (not create_event) when the user wants to modify an event that was just created \
-in this conversation — like adding attendees, changing the title, or sending invites for it.
+When the user confirms an action ("yes," "go ahead," "sounds good") and you see a \
+[System: confirmation card] note, just say something short like "On it!" The system \
+handles execution automatically.
 
-IMPORTANT: NEVER include <action_request> until you have confirmed ALL required fields with the user. \
-If you are still missing any field, just ask about it — no tags.
+If the user says "no" or wants to change something, help them adjust — the system \
+will re-collect the updated fields.
 
-NEVER include any hidden tags (<action_request>, <action_confirmed>, etc.) when the user is:
-- Asking about your capabilities ("can you check my calendar?", "do you have access to...?")
-- Complaining about or questioning a previous result ("why did it say that?", "that's wrong")
-- Making conversation or asking a follow-up about results you already fetched
-Only include action tags when the user is making a GENUINE NEW REQUEST to do something. \
-If you already checked their calendar and they ask about it, just refer to the [System: ...] \
-results you already have — do NOT re-execute the action.
-
-When the user confirms the action ("yes," "go ahead," "do it," "sounds good"):
-1. Respond with something short like "On it — let me take care of that!"
-2. At the very end of your message, append this hidden tag on its own line:
-<action_confirmed>ACTION_TYPE</action_confirmed>
-Replace ACTION_TYPE with the same type you used in the action_request tag (e.g., send_email, create_event, etc.).
-
-If the user says "no" or wants to change something about the action, ask what specifically to change. \
-Once they provide the change, re-present the FULL updated confirmation summary with ALL details \
-and include the <action_request> tag again.
+Do NOT call register_intent when the user is:
+- Asking about your capabilities ("can you check my calendar?")
+- Questioning a previous result ("that's wrong")
+- Making conversation or asking about results you already fetched
+Only call register_intent for GENUINE NEW REQUESTS. \
+If you already checked their calendar, refer to the [System: ...] results — do NOT re-execute.
 
 WORKFLOW SETUP — SET UP A RECURRING PROCESS:
 
@@ -584,25 +531,18 @@ def parse_ai_response(raw_content: str) -> dict:
     """Strip hidden signal tags from AI response and return flags.
 
     Returns dict with keys: clean_content, workflow_ready, workflow_confirmed,
-    action_request (str or None), action_confirmed,
-    workflow_manage (dict or None), workflow_manage_confirmed (dict or None).
+    workflow_manage (dict or None), workflow_manage_confirmed (dict or None),
+    and other workflow/tool signal flags.
+
+    NOTE: action_request and action_confirmed tags have been removed — intent
+    detection now uses the register_intent tool_use mechanism in get_ai_response().
     """
     workflow_ready = "<workflow_ready>true</workflow_ready>" in raw_content
     workflow_confirmed = "<workflow_confirmed>true</workflow_confirmed>" in raw_content
 
-    # Extract action_request type (e.g., "send_email" from <action_request>send_email</action_request>)
-    action_request = None
+    # Strip any leftover action tags the AI may still emit (defensive cleanup)
     action_match = re.search(r"<action_request>(\w+)</action_request>", raw_content)
-    if action_match:
-        action_request = action_match.group(1)
-
-    # Extract action_confirmed — supports both <action_confirmed>true</action_confirmed>
-    # and <action_confirmed>send_email</action_confirmed> (with action type)
-    action_confirmed = None
     confirmed_match = re.search(r"<action_confirmed>(\w+)</action_confirmed>", raw_content)
-    if confirmed_match:
-        val = confirmed_match.group(1)
-        action_confirmed = val if val != "true" else True
 
     # Extract workflow_manage (e.g., <workflow_manage>pause:New client welcome</workflow_manage>)
     workflow_manage = None
@@ -743,8 +683,6 @@ def parse_ai_response(raw_content: str) -> dict:
         "clean_content": clean,
         "workflow_ready": workflow_ready,
         "workflow_confirmed": workflow_confirmed,
-        "action_request": action_request,
-        "action_confirmed": action_confirmed,
         "workflow_manage": workflow_manage,
         "workflow_manage_confirmed": workflow_manage_confirmed,
         "connect_tool": connect_tool,
@@ -761,6 +699,36 @@ def parse_ai_response(raw_content: str) -> dict:
         "workflow_edit_confirmed": workflow_edit_confirmed,
         "choices": choices,
     }
+
+
+# ── Intent detection tool (replaces <action_request> signal tags) ───────────
+
+REGISTER_INTENT_TOOL = {
+    "name": "register_intent",
+    "description": (
+        "Call this when you recognize the user wants to perform an immediate "
+        "one-time action right now (NOT a recurring/automated workflow). "
+        "Examples: 'send Jane an email', 'create a meeting for Friday', "
+        "'what's on my calendar tomorrow', 'is 2pm free?'"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action_type": {
+                "type": "string",
+                "enum": [
+                    "send_email",
+                    "create_event",
+                    "update_event",
+                    "check_availability",
+                    "list_events",
+                ],
+                "description": "The type of action the user wants to perform",
+            },
+        },
+        "required": ["action_type"],
+    },
+}
 
 
 # ── Action extraction tools ─────────────────────────────────────────────────
@@ -1260,8 +1228,15 @@ async def get_ai_response(
     timezone: str = "UTC",
     workflow_names: Optional[List[str]] = None,
     connected_providers: Optional[List[str]] = None,
-) -> str:
-    """Send messages to Claude and return the assistant's response."""
+    form_context: Optional[str] = None,
+    include_intent_tool: bool = True,
+) -> Tuple[str, Optional[str]]:
+    """Send messages to Claude and return (text, detected_action_type).
+
+    When *include_intent_tool* is True the AI may call ``register_intent``
+    to signal an immediate-action intent.  The detected action_type (or None)
+    is returned as the second element of the tuple.
+    """
     from datetime import datetime, timezone as tz
 
     from datetime import timedelta
@@ -1300,13 +1275,33 @@ async def get_ai_response(
         system += "\n\nThe owner has no saved processes yet. If they ask to see their workflows, " \
                   "still use <workflow_list>true</workflow_list> — the system will show an empty state."
 
-    response = await client.messages.create(
+    # Append form state context when actively collecting fields
+    if form_context:
+        system += form_context
+
+    # Build API kwargs — include intent tool when not already collecting fields
+    api_kwargs: Dict = dict(
         model=CLAUDE_MODEL,
         max_tokens=1024,
         system=system,
         messages=messages,
     )
-    return response.content[0].text
+    if include_intent_tool:
+        api_kwargs["tools"] = [REGISTER_INTENT_TOOL]
+        api_kwargs["tool_choice"] = {"type": "auto"}
+
+    response = await client.messages.create(**api_kwargs)
+
+    # Parse response content blocks — may contain text and/or tool_use
+    text_parts: List[str] = []
+    detected_action: Optional[str] = None
+    for block in response.content:
+        if block.type == "text":
+            text_parts.append(block.text)
+        elif block.type == "tool_use" and block.name == "register_intent":
+            detected_action = block.input.get("action_type")
+
+    return ("\n".join(text_parts), detected_action)
 
 
 async def extract_workflow_from_conversation(messages: List[Dict[str, str]]) -> Optional[dict]:

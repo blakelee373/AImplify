@@ -4,6 +4,7 @@ from app.models.conversation import Conversation, Message
 from app.models.workflow import Workflow, WorkflowStep
 from app.models.activity_log import ActivityLog
 from app.models.integration import Integration
+from app.models.action_form import ActionFormState
 
 __all__ = [
     "User",
@@ -14,4 +15,5 @@ __all__ = [
     "WorkflowStep",
     "ActivityLog",
     "Integration",
+    "ActionFormState",
 ]
