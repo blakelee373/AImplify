@@ -933,6 +933,14 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "error": str(e),
             }
 
+    # ── Attach choices if present ───────────────────────────────────────
+    if signals.get("choices"):
+        if metadata is None:
+            metadata = {"message_type": "choices", "choices": signals["choices"]}
+        else:
+            # Append choices to existing metadata (other card type takes priority)
+            metadata["choices"] = signals["choices"]
+
     # Save assistant message
     assistant_message = Message(
         conversation_id=conversation.id,

@@ -62,6 +62,7 @@ interface MessageMetadata {
   new_schedule?: string;
   next_run_at?: string;
   current_schedule?: string;
+  choices?: string[];
 }
 
 interface MessageBubbleProps {
@@ -69,9 +70,12 @@ interface MessageBubbleProps {
   content: string;
   metadata?: MessageMetadata | null;
   onConnectTool?: (provider: string) => void;
+  onChoiceSelect?: (choice: string) => void;
+  isLatestAssistant?: boolean;
+  loading?: boolean;
 }
 
-export function MessageBubble({ role, content, metadata, onConnectTool }: MessageBubbleProps) {
+export function MessageBubble({ role, content, metadata, onConnectTool, onChoiceSelect, isLatestAssistant, loading }: MessageBubbleProps) {
   const isUser = role === "user";
 
   // Workflow confirmed — show success banner
@@ -484,6 +488,36 @@ export function MessageBubble({ role, content, metadata, onConnectTool }: Messag
             {content}
           </div>
           <WorkflowSummaryCard draft={metadata.workflow_draft} />
+        </div>
+      </div>
+    );
+  }
+
+  // Choices — show clickable buttons below the message
+  if (metadata?.message_type === "choices" && metadata.choices?.length) {
+    const isActive = isLatestAssistant && !loading;
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[75%] space-y-3">
+          <div className="bg-stone-100 rounded-2xl px-4 py-3 text-sm leading-relaxed text-stone-800 rounded-bl-md">
+            {content}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {metadata.choices.map((choice) => (
+              <button
+                key={choice}
+                onClick={() => onChoiceSelect?.(choice)}
+                disabled={!isActive}
+                className={`px-4 py-2 text-sm rounded-lg border-2 transition-colors ${
+                  isActive
+                    ? "border-blue-300 bg-blue-50 text-blue-800 font-medium hover:bg-blue-100 hover:border-blue-400 cursor-pointer"
+                    : "border-stone-200 bg-stone-50 text-stone-400 cursor-default"
+                }`}
+              >
+                {choice}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     );

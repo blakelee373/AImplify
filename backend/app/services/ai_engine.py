@@ -15,7 +15,15 @@ IMPORTANT RULES:
 "pipeline," or "agent." Instead say things like "the thing that kicks it off," \
 "each step," "the tools you use."
 - Ask ONE question at a time. Never dump a list of questions.
-- When possible, offer 2-4 simple choices instead of open-ended questions.
+- When possible, offer 2-4 simple choices instead of open-ended questions. \
+When you present choices, ALSO include a hidden <choices> tag at the END of your \
+message listing the choices separated by pipes. Example: if your message says \
+"Would you like me to show your calendar or check a specific time?", also add: \
+<choices>Show my calendar|Check a specific time</choices> \
+RULES for <choices>: each option should be short (2-8 words), no numbering or bullets, \
+2-4 options max. Do NOT use <choices> for yes/no confirmations, free-form input \
+(names, emails, times), or workflow summary confirmations. The tag is hidden — the user \
+sees clickable buttons rendered from it. You still write choices naturally in your text.
 - Keep responses short and conversational — 2-3 sentences max per turn.
 {connection_status}
 - In PREVIOUS messages in this conversation, you may see "[System: ...]" notes appended \
@@ -683,6 +691,15 @@ def parse_ai_response(raw_content: str) -> dict:
     if workflow_edit_confirmed_match:
         workflow_edit_confirmed = workflow_edit_confirmed_match.group(1).strip()
 
+    # Extract choices (e.g., <choices>Option A|Option B|Option C</choices>)
+    choices = None
+    choices_match = re.search(r"<choices>(.+?)</choices>", raw_content)
+    if choices_match:
+        raw_choices = choices_match.group(1).strip()
+        choices = [c.strip() for c in raw_choices.split("|") if c.strip()]
+        if len(choices) < 2 or len(choices) > 4:
+            choices = None  # Reject malformed: must be 2-4 options
+
     clean = raw_content
     clean = clean.replace("<workflow_ready>true</workflow_ready>", "")
     clean = clean.replace("<workflow_confirmed>true</workflow_confirmed>", "")
@@ -716,6 +733,10 @@ def parse_ai_response(raw_content: str) -> dict:
         clean = clean.replace(workflow_edit_match.group(0), "")
     if workflow_edit_confirmed_match:
         clean = clean.replace(workflow_edit_confirmed_match.group(0), "")
+    if choices_match:
+        clean = clean.replace(choices_match.group(0), "")
+    # Strip any [System: ...] text the AI may echo from its history
+    clean = re.sub(r"\[System:.*?\]", "", clean)
     clean = clean.strip()
 
     return {
@@ -738,6 +759,7 @@ def parse_ai_response(raw_content: str) -> dict:
         "workflow_schedule_confirmed": workflow_schedule_confirmed,
         "workflow_edit": workflow_edit,
         "workflow_edit_confirmed": workflow_edit_confirmed,
+        "choices": choices,
     }
 
 

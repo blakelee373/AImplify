@@ -25,10 +25,19 @@ AI operations layer for medspas. Owners describe how their business works in pla
 ## Signal Tag System
 - AI embeds hidden XML tags in responses (e.g., `<action_request>send_email</action_request>`) to trigger backend actions
 - Tags are parsed in `parse_ai_response()` in `ai_engine.py`, stripped from user-visible content
-- Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `workflow_schedule`, `workflow_schedule_confirmed`, `workflow_edit`, `workflow_edit_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`
+- Current tags: `action_request`, `action_confirmed`, `workflow_ready`, `workflow_confirmed`, `workflow_manage`, `workflow_manage_confirmed`, `workflow_list`, `workflow_activity`, `workflow_status`, `workflow_run`, `workflow_run_confirmed`, `workflow_schedule`, `workflow_schedule_confirmed`, `workflow_edit`, `workflow_edit_confirmed`, `connect_tool`, `disconnect_tool`, `disconnect_confirmed`, `choices`
 - New action types must be added to: `ACTION_EXTRACTION_TOOLS` (ai_engine.py), `ACTION_PROVIDER` map (chat.py), `_execute_chat_action` (chat.py), `ACTION_LABELS` (MessageBubble.tsx)
 - Handler ordering in chat.py matters: workflow query handlers (list/status/activity/run) must run BEFORE `_detect_action_gathering` safety net to prevent false positives on words like "schedule" in workflow descriptions
 - When adding new AI capabilities via signal tags, the system prompt must assertively state the AI HAS the capability (like connection status does) — otherwise the AI may claim it can't do it
+
+## Choice Buttons
+- `<choices>Option A|Option B|Option C</choices>` renders clickable buttons in the chat UI
+- Pipe-delimited format, 2-4 options, short phrases (2-8 words each)
+- Backend parses in `parse_ai_response()`, builds metadata `{message_type: "choices", choices: [...]}`
+- Frontend `ChoiceButtonsCard` renders buttons; clicking sends the choice text as a user message
+- Only the latest assistant message's buttons are active; older ones render as disabled/muted
+- The `choices` handler in chat.py runs AFTER all other signal handlers — if metadata is already set, choices are appended as extra field but don't override `message_type`
+- Do NOT use `<choices>` for yes/no confirmations (handled by confirmation cards), free-form input, or workflow summary confirmations
 
 ## Time-Based Triggers
 - Background scheduler runs as an asyncio task in FastAPI lifespan, checking every 60s for due workflows
