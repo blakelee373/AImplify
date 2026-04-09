@@ -31,6 +31,12 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - `compute_next_run()` in `scheduler.py` converts cron + timezone → next UTC fire time via `croniter`
 - Pausing a workflow clears `next_run_at`; resuming recomputes it
 - Claude generates cron expressions during workflow extraction (WORKFLOW_TOOL) and schedule changes (SCHEDULE_EXTRACTION_TOOL)
+- User's timezone is injected from `request.timezone` into `trigger_config.timezone` during workflow_confirmed handling
+- Scheduled runs inject owner's Gmail address into context via `users.getProfile` API so "send to yourself" resolves
+- `next_run_at` is stored as UTC; frontend must append `Z` to ISO strings before `new Date()` parsing
+- Content-based fallbacks exist for `workflow_schedule` and `action_request` tags when the AI forgets to emit them
+- `_detect_tool_from_user_intent()` pre-flight check scans user messages for tool keywords and short-circuits with connect card before calling AI
+- Google OAuth tokens expire after 7 days in "Testing" mode; `google_auth.py` catches `invalid_grant` and marks integration as "expired"
 
 ## Tool Connection System
 - Connection status is dynamic in the system prompt — built by `_build_connection_status()` from actual DB state
