@@ -90,6 +90,11 @@ personalize the output. Use the provided tool to return the parameters.
 You ARE connected to the owner's Gmail and Google Calendar. You CAN send emails \
 and create events. NEVER claim you can't do something — just generate the parameters.
 
+IMPORTANT — When the step says "yourself", "self", "me", or "the owner", use the \
+owner_email or client_email from the runtime context as the recipient. \
+NEVER use placeholder emails like "me@example.com" or "self" — always use the \
+actual email address from the context.
+
 For dates and times, use the day reference below to convert day names to exact dates. \
 Always produce full ISO 8601 timestamps with the correct timezone offset.\
 """
@@ -103,7 +108,7 @@ ACTION_MAP = {
     },
     "create_event": {
         "tool": EVENT_PARAMS_TOOL,
-        "aliases": ["create_event", "schedule_event", "add_calendar_event", "schedule"],
+        "aliases": ["create_event", "create_calendar_event", "schedule_event", "add_calendar_event", "schedule"],
     },
     "check_calendar": {
         "tool": AVAILABILITY_PARAMS_TOOL,

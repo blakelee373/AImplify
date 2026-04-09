@@ -56,6 +56,37 @@ def update_next_run(db, workflow) -> None:
         workflow.next_run_at = None
 
 
+def _build_scheduler_context(db, workflow) -> dict:
+    """Build runtime context for a scheduled workflow run.
+
+    Injects the owner's email address (from Gmail) and timezone so that
+    steps like "send reminder to yourself" can resolve to a real address.
+    """
+    context = {}
+
+    # Inject timezone from trigger config
+    tz_name = (workflow.trigger_config or {}).get("timezone", "UTC")
+    context["timezone"] = tz_name
+
+    # Inject owner's Gmail address
+    try:
+        from app.services.google_auth import get_google_credentials
+        from googleapiclient.discovery import build as goog_build
+
+        creds = get_google_credentials(db, provider="gmail")
+        if creds:
+            service = goog_build("gmail", "v1", credentials=creds)
+            profile = service.users().getProfile(userId="me").execute()
+            email = profile.get("emailAddress")
+            if email:
+                context["owner_email"] = email
+                context["client_email"] = email  # Alias for step executor
+    except Exception:
+        pass
+
+    return context
+
+
 async def scheduler_loop() -> None:
     """Background task that checks for due workflows every 60 seconds."""
     from app.database import SessionLocal
@@ -96,7 +127,9 @@ async def scheduler_loop() -> None:
                         workflow.name,
                     )
                     try:
-                        context = {}  # Scheduled runs have no runtime context
+                        # Build context for scheduled runs — inject owner's
+                        # email so steps like "send to yourself" can resolve
+                        context = _build_scheduler_context(db, workflow)
                         results = await run_workflow(db, workflow, context)
                         all_success = all(r["status"] == "success" for r in results)
 
