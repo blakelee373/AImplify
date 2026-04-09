@@ -380,6 +380,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             }
 
     # ── Schedule management (set / change schedule) ──────────────────────
+    # Fallback: detect schedule change proposals from AI response content
+    # when the AI forgets to emit the <workflow_schedule> tag
+    if not signals["workflow_schedule"] and not metadata:
+        detected_wf = _detect_schedule_change(clean_content, all_workflows)
+        if detected_wf:
+            signals["workflow_schedule"] = detected_wf
+
     if signals["workflow_schedule"]:
         wf_name = signals["workflow_schedule"]
         matched = match_workflow_by_name(all_workflows, wf_name)
@@ -1023,6 +1030,34 @@ def _find_latest_schedule_request(db: Session, conversation_id: int) -> Optional
         if msg.metadata_json and isinstance(msg.metadata_json, dict):
             if msg.metadata_json.get("message_type") == "workflow_schedule_request":
                 return msg.metadata_json
+    return None
+
+
+def _detect_schedule_change(content: str, workflows: list) -> Optional[str]:
+    """Detect if the AI is proposing a schedule change without emitting the tag.
+
+    Looks for patterns like 'change "X" to run daily' or 'update X to every Monday'
+    combined with a confirmation question. Returns the matched workflow name or None.
+    """
+    lower = content.lower()
+
+    # Must look like a confirmation
+    confirm_phrases = ["sound good", "that right", "get that right", "want me to",
+                       "shall i", "go ahead", "ready to", "is that correct"]
+    if not any(p in lower for p in confirm_phrases):
+        return None
+
+    # Must mention schedule-related words
+    schedule_words = ["change", "update", "switch", "move", "set",
+                      "daily", "weekly", "every", "schedule", "run"]
+    if not any(w in lower for w in schedule_words):
+        return None
+
+    # Try to match a workflow name from the content
+    for wf in workflows:
+        if wf.name.lower() in lower:
+            return wf.name
+
     return None
 
 
