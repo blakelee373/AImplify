@@ -107,6 +107,13 @@ You can reference the original email's subject and content to personalize the re
 Example: if email_sender is "jane@example.com" and the step says "send welcome reply", \
 set recipient to "jane@example.com".
 
+CALENDAR-TRIGGERED WORKFLOWS — When the context contains calendar_event_summary, \
+calendar_event_start, and calendar_event_end, this workflow was triggered by a calendar event. \
+For notification/email steps, reference the event details to personalize the message. \
+calendar_event_attendees contains a comma-separated list of attendee emails. \
+Example: if calendar_event_summary is "Consultation with Jane" and calendar_event_start \
+is "2026-04-10T14:00:00-05:00", include the event title and formatted time in the email body.
+
 For dates and times, use the day reference below to convert day names to exact dates. \
 Always produce full ISO 8601 timestamps with the correct timezone offset.\
 """

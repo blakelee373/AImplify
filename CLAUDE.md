@@ -56,6 +56,20 @@ AI operations layer for medspas. Owners describe how their business works in pla
 - `extract_email_filter_from_conversation()` in `ai_engine.py` is scaffolding for future email filter editing
 - SQLite strips timezone info from datetimes — always treat naive `last_run_at` as UTC when converting to epoch
 
+## Calendar-Based Triggers
+- Background calendar watcher runs as an asyncio task in FastAPI lifespan, polling Google Calendar every 60s
+- Two event types: `calendar_event_created` (new/modified events via `updatedMin`) and `calendar_event_starting` (upcoming events within lead time window)
+- `trigger_config.calendar_filter` stores matching criteria: `summary_contains`, `attendee_email`, `description_contains`, `min_duration_minutes`
+- `trigger_config.lead_time_minutes` for "starting" type (default 30 minutes)
+- Empty `calendar_filter` matches all events — only add filter fields the owner explicitly describes
+- Calendar context (summary, start, end, attendees, description) is injected into workflow step execution
+- Same dedup pattern as email watcher: in-memory `OrderedDict` keyed by `event_id`, capped at 200 per workflow
+- `_matches_calendar_filter()` uses AND logic — all specified criteria must match
+- System prompt guides owners through describing calendar triggers in plain language with two paths: new events vs. reminders before events
+- For `calendar_event_created`: `last_run_at` used as `updatedMin` with 60s overlap buffer
+- For `calendar_event_starting`: polls events starting within `now` to `now + lead_time_minutes`
+- All-day events (date-only, no dateTime) are handled by `_parse_event_detail`; `singleEvents=True` expands recurring events
+
 ## Workflow Editing
 - `workflow_edit` / `workflow_edit_confirmed` signal tags let owners change step content via chat
 - Edit handler prefers the workflow linked to the current conversation (by `conversation_id`) over name matching — prevents editing the wrong workflow when names are duplicated

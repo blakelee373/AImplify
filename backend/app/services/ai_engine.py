@@ -223,6 +223,47 @@ When the AI extraction tool runs, it should set:
 IMPORTANT: Always include "is:unread" in the gmail_query unless the owner specifically \
 says they want to match read emails too. This prevents re-processing old emails.
 
+CALENDAR-TRIGGERED WORKFLOWS:
+
+If the owner says their workflow is kicked off by a calendar event (like "when a new \
+consultation is booked", "30 minutes before each appointment", "when someone schedules \
+a meeting with me", "before each client visit"), this is a CALENDAR-TRIGGERED workflow. \
+During discovery:
+
+a) Ask what kind of calendar events should kick it off. Offer two main options:
+   "How should this work?
+    • Watch for NEW events being added to your calendar (e.g., when a booking appears)
+    • Send a reminder BEFORE upcoming events (e.g., 30 minutes before appointments)"
+b) For NEW EVENT triggers (calendar_event_created), ask follow-up questions:
+   - "Should I watch for specific types of events?" with filter options:
+     • Events with certain words in the title (e.g., "consultation", "booking")
+     • Events with a specific attendee
+     • Any new event on your calendar
+c) For BEFORE EVENT triggers (calendar_event_starting), ask:
+   - "How much notice do you need?" with options:
+     • 15 minutes before
+     • 30 minutes before
+     • 1 hour before
+     • A custom time
+   - Then ask about filtering (same as above)
+d) When summarizing the workflow, describe the trigger clearly:
+   "Watches your calendar for [description] and then [steps]"
+
+When the AI extraction tool runs, it should set:
+- trigger_type: "event"
+- trigger_config.event_type: "calendar_event_created" (for new/changed events) \
+or "calendar_event_starting" (for reminders before events)
+- trigger_config.calendar_filter.summary_contains: keywords to match in event titles (optional)
+- trigger_config.calendar_filter.attendee_email: specific attendee email (optional)
+- trigger_config.calendar_filter.description_contains: keywords in event description (optional)
+- trigger_config.calendar_filter.min_duration_minutes: minimum event length (optional)
+- trigger_config.lead_time_minutes: for "calendar_event_starting", minutes before event (default 30)
+- trigger_config.description: plain-English description of what calendar events to watch for
+- trigger_config.frequency: "on_event"
+
+IMPORTANT: If no specific filter criteria are mentioned, leave calendar_filter empty — \
+the workflow will match ALL calendar events. Only add filter fields the owner explicitly describes.
+
 WORKFLOW MANAGEMENT — PAUSE, RESUME, OR DELETE AN EXISTING PROCESS:
 
 If the user wants to pause, resume, or delete an existing process they already set up, \
@@ -410,7 +451,8 @@ WORKFLOW_TOOL = {
                     },
                     "event_type": {
                         "type": "string",
-                        "description": "Specific event (e.g., 'new_booking', 'email_received')",
+                        "description": "Specific event (e.g., 'new_booking', 'email_received', "
+                        "'calendar_event_created', 'calendar_event_starting')",
                     },
                     "gmail_query": {
                         "type": "string",
@@ -430,6 +472,32 @@ WORKFLOW_TOOL = {
                     "timezone": {
                         "type": "string",
                         "description": "IANA timezone of the schedule, e.g. 'America/Chicago', 'America/New_York'",
+                    },
+                    "calendar_filter": {
+                        "type": "object",
+                        "description": "Filter criteria for calendar event triggers. Only include fields the owner specified.",
+                        "properties": {
+                            "summary_contains": {
+                                "type": "string",
+                                "description": "Keywords to match in event titles (e.g., 'consultation', 'booking')",
+                            },
+                            "attendee_email": {
+                                "type": "string",
+                                "description": "Email address of a specific attendee to match",
+                            },
+                            "description_contains": {
+                                "type": "string",
+                                "description": "Keywords to match in event descriptions",
+                            },
+                            "min_duration_minutes": {
+                                "type": "integer",
+                                "description": "Minimum event duration in minutes",
+                            },
+                        },
+                    },
+                    "lead_time_minutes": {
+                        "type": "integer",
+                        "description": "For calendar_event_starting triggers, how many minutes before the event to fire (default 30)",
                     },
                 },
                 "required": ["frequency"],
@@ -485,7 +553,22 @@ IMPORTANT — When trigger_type is "event" and event_type is "email_received":
 - Set trigger_config.description to a plain-English description of the email filter.
 - CRITICAL: Do NOT create "check" or "filter" steps in the workflow (like "check_email_subject"). \
 The gmail_query already handles filtering — only include ACTION steps (send_email, create_event, etc.). \
-For reply workflows, use action_type "send_email" with a description like "Send welcome reply to the sender".\
+For reply workflows, use action_type "send_email" with a description like "Send welcome reply to the sender".
+
+IMPORTANT — When trigger_type is "event" and event_type is "calendar_event_created" or "calendar_event_starting":
+- Set trigger_config.frequency to "on_event".
+- Set trigger_config.description to a plain-English description of what calendar events to watch for.
+- For "calendar_event_created": watches for new/updated events on the owner's calendar. \
+Set calendar_filter with any matching criteria the owner specified.
+- For "calendar_event_starting": fires before events start. Set lead_time_minutes (default 30).
+- Set calendar_filter fields as needed: summary_contains, attendee_email, description_contains, min_duration_minutes.
+- If the owner didn't specify any filter criteria, omit calendar_filter entirely (matches all events).
+- Examples: "30 minutes before each appointment" → event_type="calendar_event_starting", lead_time_minutes=30 \
+"when a new consultation is booked" → event_type="calendar_event_created", calendar_filter.summary_contains="consultation" \
+"1 hour before meetings with Dr. Smith" → event_type="calendar_event_starting", lead_time_minutes=60, \
+calendar_filter.attendee_email="drsmith@example.com"
+- CRITICAL: Do NOT create "check" or "filter" steps. The calendar_filter handles matching — \
+only include ACTION steps (send_email, create_event, etc.).\
 """
 
 

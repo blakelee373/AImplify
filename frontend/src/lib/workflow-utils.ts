@@ -8,10 +8,19 @@ export function getTriggerLabel(
     if (triggerConfig.event_type === "email_received" && triggerConfig.description) {
       return `Watches for ${triggerConfig.description}`;
     }
+    if (
+      (triggerConfig.event_type === "calendar_event_created" ||
+        triggerConfig.event_type === "calendar_event_starting") &&
+      triggerConfig.description
+    ) {
+      return `Watches for ${triggerConfig.description}`;
+    }
     const labels: Record<string, string> = {
       new_booking: "When a new booking comes in",
       email_received: "When a matching email arrives",
       cancellation: "When a booking is cancelled",
+      calendar_event_created: "When a new calendar event is added",
+      calendar_event_starting: "Before upcoming calendar events",
     };
     return labels[triggerConfig.event_type] || `When: ${triggerConfig.event_type}`;
   }

@@ -99,6 +99,7 @@ const ACTION_ICONS: Record<string, string> = {
   send_email: "✉",
   create_event: "📅",
   check_calendar: "🔍",
+  calendar_triggered_run: "📅",
 };
 
 function formatEventTime(iso: string): string {
