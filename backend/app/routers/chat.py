@@ -229,6 +229,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         # Find the most recent workflow draft in this conversation
         draft = _find_latest_draft(db, conversation.id)
         if draft:
+            # Inject the user's timezone into schedule trigger config so cron
+            # fires at the right local time (not UTC)
+            if draft.get("trigger_type") == "schedule":
+                tc = draft.get("trigger_config") or {}
+                if "timezone" not in tc:
+                    tc["timezone"] = tz
+                    draft["trigger_config"] = tc
             workflow = create_workflow_from_draft(db, draft, conversation.id)
             metadata = {"message_type": "workflow_confirmed", "workflow_id": workflow.id}
 
